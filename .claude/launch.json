@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "equity",
+      "runtimeExecutable": "mvn",
+      "runtimeArgs": ["spring-boot:run"],
+      "port": 8090
+    }
+  ]
+}

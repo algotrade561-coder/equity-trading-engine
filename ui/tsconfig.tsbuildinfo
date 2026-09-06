@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/pill.tsx","./src/components/statuspills.tsx","./src/lib/api.ts","./src/lib/format.ts","./src/lib/usepoll.ts","./src/pages/dashboard.tsx","./src/pages/positions.tsx","./src/pages/rejections.tsx","./src/pages/settings.tsx","./src/pages/strategysection.tsx","./src/pages/universe.tsx"],"version":"5.9.3"}

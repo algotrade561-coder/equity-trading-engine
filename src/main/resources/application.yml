@@ -1,0 +1,141 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: equity
+
+  # H2 in FILE mode. MODE=PostgreSQL keeps the SQL portable, so moving to a real Postgres later is a
+  # URL change rather than a rewrite. AUTO_SERVER lets a second process (a console, a report) attach
+  # to the same file without stopping the engine.
+  datasource:
+    url: jdbc:h2:file:./data/equity;MODE=PostgreSQL;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+    hikari:
+      # Sized deliberately. The sibling engine ran on the default pool of 10 and had a login-time
+      # connection storm — a dashboard load fires many concurrent queries, exhausted the pool, and
+      # the trading path then had to queue behind them. The trading path must never wait on a report.
+      maximum-pool-size: 20
+      minimum-idle: 4
+      connection-timeout: 10000
+
+  # A full SQL shell over the trading database — positions, the loss latch, encrypted credentials.
+  # Off by default and deliberately not something to leave on: with sign-in disabled it would be
+  # reachable by anyone who can reach the port. When sign-in is on it requires ADMIN.
+  h2:
+    console:
+      enabled: ${H2_CONSOLE_ENABLED:false}
+      path: /h2-console
+      settings:
+        # Refuse connections from anywhere but this machine, whatever the security config says.
+        web-allow-others: true
+
+  jpa:
+    hibernate:
+      # The schema is owned by the entities for now. A real migration tool belongs here before the
+      # first deployment that has data worth keeping across a schema change.
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          # The console is a single hand-edited page that changes constantly, and a stale copy is
+          # indistinguishable from broken code: buttons that call endpoints the old script does not
+          # know about simply do nothing. Revalidate every load; it is one small file on localhost.
+          no-store: true
+
+# ── The engine ───────────────────────────────────────────────────────────────
+# mode and trading-enabled are the two switches that decide whether an order can leave this
+# process, and BOTH must be on. They are the only settings deliberately left to the local override
+# in ./config/application.yml: a test asserts that a fresh checkout of this file cannot trade, so
+# arming has to be a decision somebody makes on a machine, never one that arrives with a clone.
+engine:
+  mode: REPLAY            # LIVE | REPLAY — ships as REPLAY, override locally to go live
+  trading-enabled: false  # master kill switch; no entry order may be sent while false
+
+# ── What the engine watches ──────────────────────────────────────────────────
+# There is no constituent list in the source. NSE publishes the members of every index as a public
+# CSV and the engine reads it, so renames, additions and removals arrive on their own — the list
+# that used to live in UniverseProperties had rotted, carrying two symbols the exchange had renamed
+# whose stocks were then silently never evaluated.
+equity:
+  universe:
+    index-name: NIFTY 500
+    # Swap the file to trade a different index; the 50, 100 and 200 lists live alongside it in the
+    # same format. Public and unauthenticated.
+    index-url: https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv
+    # The last successful fetch. A briefly unreachable host at 09:15 must not mean an empty
+    # universe, and index membership changes a handful of times a year.
+    cache-file: ./data/universe-constituents.txt
+    # A deliberate override. Anything listed here is used verbatim and nothing is fetched — useful
+    # to pin the universe to a few names for a test. Empty means "read the index".
+    symbols: []
+    auto-subscribe: true
+    # Watching five hundred stocks in full depth is not possible: the feed caps depth at 200
+    # instruments and exceeding it costs no error, it just stops sending the book. So everything
+    # streams quotes and the day's strongest names are promoted — only those can produce an entry,
+    # because the risk check refuses an entry without depth.
+    evaluate-all: false
+    enter-rank: 20          # promoted to full depth at or above this rank
+    exit-rank: 35           # demoted below it; the gap is hysteresis, not indecision
+    sanity-band-percent: 25 # a day change beyond this reads as an unadjusted split, not a move
+
+  auth:
+    google:
+      # Off by default so a fresh checkout starts. MUST be on before this is reachable beyond
+      # localhost — with it off every endpoint is open.
+      enabled: ${GOOGLE_AUTH_ENABLED:false}
+    # Created as ADMIN at startup if it does not already exist. The allow-list is the gate, so
+    # without a seed row nobody can sign in at all — including whoever administers it.
+    seed-email: ${EQUITY_SEED_EMAIL:}
+
+  security:
+    # Encrypts broker credentials and tokens before they reach the database. Unset means the engine
+    # runs but declines to store them, rather than storing them in clear text.
+    secret-key: ${EQUITY_SECRET_KEY:}
+
+  broker:
+    kite:
+      # Own Kite Connect app, separate from the options engine: an app holds exactly one registered
+      # redirect URL, so two engines sharing one would fight over that single setting.
+      enabled: ${KITE_ENABLED:true}
+      api-key: ${KITE_API_KEY:}
+      api-secret: ${KITE_API_SECRET:}
+      # Must match the redirect URL registered against the app, character for character.
+      redirect-url: ${KITE_REDIRECT_URL:http://localhost:8090/api/broker/kite/callback}
+      rest-url: https://api.kite.trade
+      websocket-url: wss://ws.kite.trade
+      login-url: https://kite.zerodha.com/connect/login
+      instruments-url: https://api.kite.trade/instruments
+      connect-timeout: 5s
+      read-timeout: 10s
+      reconnect-delay: 2s
+      max-reconnect-delay: 60s
+      feed-silence-timeout: 15s
+      login-window: 10m
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  # A file as well as the console: an IDE run scrolls its console away, and the questions worth
+  # asking about a session ("what did it do at 10:42") are asked after the fact.
+  file:
+    name: logs/equity.log
+  logback:
+    rollingpolicy:
+      max-file-size: 20MB
+      max-history: 14
+  level:
+    com.equity: INFO
