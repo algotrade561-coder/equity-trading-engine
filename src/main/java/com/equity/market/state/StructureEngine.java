@@ -70,11 +70,26 @@ public class StructureEngine {
                 tick.receivedAt()));
     }
 
+    /**
+     * Recomputes a symbol's indicators from whatever history it now has.
+     *
+     * <p>For after a backfill: seeded candles arrive silently, so nothing would otherwise recompute
+     * VWAP, the EMAs or ATR, and the state would still describe the truncated series the process
+     * started with.</p>
+     */
+    public void rebuild(String symbol) {
+        recompute(symbol);
+    }
+
     /** Slow path. Only 1m closes drive it; higher timeframes are read from history when needed. */
     private void onCandleClosed(Candle candle) {
         if (candle.timeframe() != Timeframe.M1) return;
+        recompute(candle.symbol());
+    }
 
-        List<Candle> minutes = candles.history(candle.symbol(), Timeframe.M1);
+    private void recompute(String symbol) {
+
+        List<Candle> minutes = candles.history(symbol, Timeframe.M1);
         double vwap = Indicators.vwap(minutes);
         double atr = Indicators.atr(minutes, 14);
         double ema9 = Indicators.ema(minutes, 9);
@@ -87,7 +102,7 @@ public class StructureEngine {
         double indexReturn5m = indexReturn();
 
         AtomicReference<SharedInstrumentState> ref = states.computeIfAbsent(
-                candle.symbol(), s -> new AtomicReference<>(empty(s)));
+                symbol, s -> new AtomicReference<>(empty(s)));
 
         ref.updateAndGet(prev -> new SharedInstrumentState(
                 prev.symbol(), prev.previousClose(), prev.open(), prev.dayHigh(), prev.dayLow(),

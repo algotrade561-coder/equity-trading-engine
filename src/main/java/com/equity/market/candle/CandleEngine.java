@@ -60,6 +60,28 @@ public final class CandleEngine {
         builders.values().forEach(b -> b.closeIfElapsed(now));
     }
 
+    /**
+     * Installs completed bars for a symbol without notifying anyone.
+     *
+     * <p>Silence is the whole point. Publishing these would run the strategy over historical bars as
+     * though they were arriving live: setups would advance, a trigger could fire on a price from
+     * hours ago, and the engine could place an order against a level the market has long left. The
+     * candles are needed for the indicators, not for the decisions that already did or did not
+     * happen.</p>
+     *
+     * <p>Existing bars win on a timestamp collision. Anything already here was built from this
+     * session's own tick stream, and the disagreements are at the edges — a partial first minute, or
+     * the bar in progress — where the live series is the one consistent with what the engine has
+     * already acted on.</p>
+     *
+     * @return how many bars were actually added
+     */
+    public synchronized int seed(String symbol, Timeframe tf, List<Candle> bars) {
+        if (bars == null || bars.isEmpty()) return 0;
+        SymbolBuilder b = builders.computeIfAbsent(symbol, SymbolBuilder::new);
+        return b.seed(tf, bars);
+    }
+
     public List<Candle> history(String symbol, Timeframe tf) {
         SymbolBuilder b = builders.get(symbol);
         return b == null ? List.of() : b.history(tf);
@@ -86,7 +108,16 @@ public final class CandleEngine {
         static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CandleEngine.class);
     }
 
-    /** All per-symbol state. Mutated only by the feed thread. */
+    /**
+     * All per-symbol state.
+     *
+     * <p>Two threads reach it, not one as this once claimed: ticks arrive on the feed thread while
+     * the stale-bucket sweep runs on the scheduler. Both can close the same bucket, and the same
+     * candle was then published twice — invisible for a long time, because recomputing an indicator
+     * from the same history twice yields the same answer. Persisting candles made it visible as a
+     * unique-key violation, which is what that constraint is for. Every mutator is synchronised on
+     * the builder so a bucket closes exactly once.</p>
+     */
     private final class SymbolBuilder {
         private final String symbol;
         private final Map<Timeframe, List<Candle>> closed = new EnumMap<>(Timeframe.class);
@@ -102,7 +133,25 @@ public final class CandleEngine {
             for (Timeframe tf : Timeframe.values()) closed.put(tf, new ArrayList<>());
         }
 
-        void accept(Tick t) {
+        synchronized int seed(Timeframe tf, List<Candle> bars) {
+            List<Candle> existing = closed.get(tf);
+            java.util.Set<java.time.Instant> have = new java.util.HashSet<>();
+            for (Candle c : existing) have.add(c.startTime());
+
+            int added = 0;
+            for (Candle c : bars) {
+                if (have.add(c.startTime())) {
+                    existing.add(c);
+                    added++;
+                }
+            }
+            // The indicators walk this list in order and would otherwise read a series that jumps
+            // backwards in time the moment seeded bars land after live ones.
+            existing.sort(java.util.Comparator.comparing(Candle::startTime));
+            return added;
+        }
+
+        synchronized void accept(Tick t) {
             Instant minute = t.exchangeTime().truncatedTo(ChronoUnit.MINUTES);
 
             if (!hasBucket) {
@@ -123,7 +172,7 @@ public final class CandleEngine {
             lastCumulativeVolume = t.cumulativeVolume();
         }
 
-        void closeIfElapsed(Instant now) {
+        synchronized void closeIfElapsed(Instant now) {
             if (hasBucket && now.isAfter(bucketStart.plus(Duration.ofMinutes(1)))) {
                 closeBucket();
                 hasBucket = false;

@@ -56,8 +56,12 @@ class KiteBrokerAdapterTest {
         sessions.put(new KiteSession(USER, "AB1234", "test_access_token", "pub",
                 LocalDate.of(2026, 9, 4), NOW));
 
-        adapter = new KiteBrokerAdapter(new KiteHttp(kiteProps), sessions,
-                new KiteCredentialsProvider(kiteProps), kiteProps, engineProps);
+        KiteHttp http = new KiteHttp(kiteProps);
+        adapter = new KiteBrokerAdapter(http, sessions,
+                new KiteCredentialsProvider(kiteProps),
+                new KiteInstrumentMaster(kiteProps, http, new KiteCredentialsProvider(kiteProps),
+                        sessions),
+                kiteProps, engineProps);
     }
 
     @AfterEach

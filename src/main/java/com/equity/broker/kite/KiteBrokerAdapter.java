@@ -7,8 +7,10 @@ import com.equity.broker.BrokerOrder;
 import com.equity.broker.BrokerPort;
 import com.equity.broker.BrokerPosition;
 import com.equity.broker.OrderRequest;
+import com.equity.domain.market.Candle;
 import com.equity.domain.user.UserId;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,22 +34,26 @@ import org.springframework.stereotype.Component;
  * up, where the difference between opening and closing is known.</p>
  */
 @Component
-public class KiteBrokerAdapter implements BrokerPort {
+public class KiteBrokerAdapter implements BrokerPort,
+        com.equity.broker.HistoricalDataPort {
 
     private static final Logger log = LoggerFactory.getLogger(KiteBrokerAdapter.class);
 
     private final KiteHttp http;
     private final KiteSessionStore sessions;
     private final KiteCredentialsProvider credentials;
+    private final KiteInstrumentMaster instruments;
     private final KiteProperties kiteProperties;
     private final EngineProperties engineProperties;
 
     public KiteBrokerAdapter(KiteHttp http, KiteSessionStore sessions,
-                             KiteCredentialsProvider credentials, KiteProperties kiteProperties,
+                             KiteCredentialsProvider credentials, KiteInstrumentMaster instruments,
+                             KiteProperties kiteProperties,
                              EngineProperties engineProperties) {
         this.http = http;
         this.sessions = sessions;
         this.credentials = credentials;
+        this.instruments = instruments;
         this.kiteProperties = kiteProperties;
         this.engineProperties = engineProperties;
     }
@@ -182,6 +188,66 @@ public class KiteBrokerAdapter implements BrokerPort {
     }
 
     /** Resolves this user's own credentials and token, so no call can borrow another user's session. */
+    // ── Historical data ──────────────────────────────────────────────────────
+
+    /** A liquid name certain to be in the master, used only to ask whether history is served. */
+    private static final String PROBE_SYMBOL = "RELIANCE";
+
+    /**
+     * Today's completed 1-minute bars, so a restart does not begin the session over.
+     *
+     * <p>Kite answers with {@code [timestamp, open, high, low, close, volume]} per candle, oldest
+     * first, which is the order the indicators expect.</p>
+     *
+     * <p>Returns empty on any failure rather than throwing. Historical data is a paid add-on and an
+     * account without it gets a refusal per request; the caller's fallback is the live tick stream it
+     * was already using, so a missing subscription costs the backfill and nothing else.</p>
+     */
+    @Override
+    public List<Candle> intradayMinutes(UserId userId, String symbol, LocalDate date) {
+        Long token = instruments.tokenFor(symbol).orElse(null);
+        if (token == null) return List.of();
+
+        // Kite wants IST wall-clock, and the whole session in one request. Bounding it to the
+        // trading day rather than "now" keeps the response identical however late it is requested.
+        String from = date + "+09:00:00";
+        String to = date + "+15:30:00";
+        String path = String.format("/instruments/historical/%d/minute?from=%s&to=%s",
+                token, from.replace("+", "%20"), to.replace("+", "%20"));
+
+        try {
+            JsonNode data = call(userId, (creds, tokenValue) -> http.get(path, creds, tokenValue));
+            JsonNode candles = data.path("candles");
+            if (!candles.isArray() || candles.isEmpty()) return List.of();
+
+            List<Candle> out = new java.util.ArrayList<>(candles.size());
+            for (JsonNode c : candles) {
+                if (!c.isArray() || c.size() < 6) continue;
+                java.time.Instant at = java.time.OffsetDateTime.parse(c.get(0).asText()).toInstant();
+                out.add(new Candle(symbol, com.equity.domain.market.Timeframe.M1, at,
+                        c.get(1).asDouble(), c.get(2).asDouble(), c.get(3).asDouble(),
+                        c.get(4).asDouble(), c.get(5).asLong()));
+            }
+            return out;
+
+        } catch (RuntimeException e) {
+            log.debug("no historical data for {}: {}", symbol, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Probes the endpoint once with a symbol that is certain to exist.
+     *
+     * <p>Asking up front means the "historical data is not subscribed" message appears once, at
+     * startup, instead of as five hundred individual refusals nobody reads.</p>
+     */
+    @Override
+    public boolean isHistoryAvailable(UserId userId, LocalDate date) {
+        if (!sessions.isAuthenticated(userId)) return false;
+        return !intradayMinutes(userId, PROBE_SYMBOL, date).isEmpty();
+    }
+
     private JsonNode call(UserId userId, KiteCall call) {
         KiteSession session = sessions.get(userId).orElseThrow(() -> new BrokerException(
                 "user " + userId + " has no valid Kite session", "TokenException", false));
