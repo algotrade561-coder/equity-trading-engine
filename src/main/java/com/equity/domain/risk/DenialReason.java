@@ -52,4 +52,21 @@ public enum DenialReason {
                 || this == MAX_OPEN_POSITIONS || this == SYMBOL_COOLDOWN
                 || this == INSUFFICIENT_MARGIN || this == BROKER_ERROR;
     }
+
+    /**
+     * True when this refusal cannot change for the rest of the session.
+     *
+     * <p>Most denials are momentary — a spread widens and narrows, margin is freed by an exit, a
+     * halted user is resumed — so the setup is worth holding briefly and retrying. These two are
+     * not. The attempt budget is spent for the day and the loss latch is deliberately irreversible,
+     * so retrying either can only produce the same answer.</p>
+     *
+     * <p>It mattered on the first live day. The attempt cap was reached at 09:35, and armed setups
+     * went on re-triggering every two minutes until the close — one stock 140 times — producing 264
+     * intents where nine distinct opportunities existed, and burying the journal that was supposed
+     * to explain the day.</p>
+     */
+    public boolean isTerminalForSession() {
+        return this == MAX_DAILY_ATTEMPTS || this == DAILY_LOSS_LATCHED;
+    }
 }

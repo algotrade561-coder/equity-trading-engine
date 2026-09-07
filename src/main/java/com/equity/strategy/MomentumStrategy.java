@@ -53,6 +53,11 @@ public class MomentumStrategy {
      * trigger again. Whatever refused it needs time to change; retrying on the next tick cannot help.
      */
     private static final Duration ENTRY_RETRY_HOLD_OFF = Duration.ofMinutes(2);
+    /**
+     * Long enough to outlast any trading session, for refusals that cannot change until tomorrow.
+     * Setups are per-process and discarded at shutdown, so nothing carries this into the next day.
+     */
+    private static final Duration REST_OF_SESSION = Duration.ofHours(12);
 
     private final TradingClock clock;
     private final Map<String, SetupState> setups = new ConcurrentHashMap<>();
@@ -396,8 +401,20 @@ public class MomentumStrategy {
 
     /** Called when an entry attempt did not become a position, so the setup can be tried again. */
     public void onEntryAbandoned(UserId userId, String symbol) {
+        onEntryAbandoned(userId, symbol, false);
+    }
+
+    /**
+     * @param forTheSession true when the refusal cannot change before tomorrow, in which case the
+     *                      setup is held off for the rest of the day rather than for two minutes.
+     *                      Retrying a spent attempt budget or a latched loss can only ever produce
+     *                      the same answer, and doing so every two minutes until the close is how
+     *                      nine real opportunities were recorded as two hundred and sixty-four.
+     */
+    public void onEntryAbandoned(UserId userId, String symbol, boolean forTheSession) {
         java.time.Instant now = clock.now();
-        setupFor(userId, symbol).holdOffUntil(now.plus(ENTRY_RETRY_HOLD_OFF), now);
+        Duration holdOff = forTheSession ? REST_OF_SESSION : ENTRY_RETRY_HOLD_OFF;
+        setupFor(userId, symbol).holdOffUntil(now.plus(holdOff), now);
     }
 
     private void invalidate(SetupState setup, java.time.Instant now) {

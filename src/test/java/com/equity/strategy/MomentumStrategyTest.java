@@ -523,4 +523,44 @@ class MomentumStrategyTest {
         assertThat(strategy.setupFor(account.userId(), SYMBOL).state())
                 .isEqualTo(MomentumState.IDLE);
     }
+
+    /**
+     * A refusal that cannot change today stops the setup for the day.
+     *
+     * <p>On the first live session the attempt cap was reached at 09:35 and armed setups went on
+     * re-triggering every two minutes until the close — one stock 140 times. Nine distinct
+     * opportunities were recorded as 264 intents, which buried the journal meant to explain the day.
+     * Retrying a spent budget or a latched loss can only ever produce the same answer.</p>
+     */
+    @Test
+    void aRefusalThatCannotChangeTodayStopsTheSetupForTheDay() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        strategy.onTick(account, state, tickAt(trigger + 0.5));
+        strategy.onEntryAbandoned(account.userId(), SYMBOL, true);
+
+        clock.advance(java.time.Duration.ofHours(4));   // the rest of a session
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("the attempt budget cannot refill before tomorrow")
+                .isFalse();
+    }
+
+    @Test
+    void aMomentaryRefusalStillRetriesAfterTheShortHoldOff() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        strategy.onTick(account, state, tickAt(trigger + 0.5));
+        strategy.onEntryAbandoned(account.userId(), SYMBOL, false);
+
+        clock.advance(java.time.Duration.ofMinutes(3));
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("a wide spread or a margin shortfall clears; the setup must come back")
+                .isTrue();
+    }
 }

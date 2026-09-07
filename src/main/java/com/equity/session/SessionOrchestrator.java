@@ -239,7 +239,8 @@ public class SessionOrchestrator {
             journal.riskDenial(account.userId(), state,
                     strategy.setupFor(account.userId(), state.symbol()),
                     decision.denialReason().name(), decision.note());
-            strategy.onEntryAbandoned(account.userId(), state.symbol());
+            strategy.onEntryAbandoned(account.userId(), state.symbol(),
+                    decision.denialReason().isTerminalForSession());
             return;
         }
 
