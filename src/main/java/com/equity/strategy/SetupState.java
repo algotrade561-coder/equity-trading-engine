@@ -38,6 +38,17 @@ public class SetupState {
      * get placed.</p>
      */
     private Instant retriggerAfter;
+    /**
+     * Whether the mandatory conditions held at the most recent candle close.
+     *
+     * <p>An armed setup is triggered by ticks, but the mandatory conditions are evaluated on candle
+     * closes — and a failure there left the setup ARMED and perfectly triggerable. The tick path
+     * checks only that it is armed, and the trigger-time recheck deliberately covers just the
+     * price-derived conditions, because the rest cannot change between closes. Which is true, and
+     * exactly why it was wrong to ignore them: the last close had already said no.</p>
+     */
+    private boolean mandatoryOk = true;
+    private String mandatoryFailure = "";
 
     public MomentumState state()        { return state; }
     public EntryPattern pattern()       { return pattern; }
@@ -49,6 +60,14 @@ public class SetupState {
     public Instant enteredStateAt()     { return enteredStateAt; }
     public Instant cooldownUntil()      { return cooldownUntil; }
     public Instant retriggerAfter()     { return retriggerAfter; }
+    public boolean mandatoryOk()        { return mandatoryOk; }
+    public String mandatoryFailure()    { return mandatoryFailure; }
+
+    /** Records the mandatory verdict from a candle close, for the tick path to honour. */
+    public void recordMandatory(boolean ok, String failure) {
+        this.mandatoryOk = ok;
+        this.mandatoryFailure = ok ? "" : failure;
+    }
 
     /**
      * Re-arms after an entry that was authorised but never became a position.

@@ -461,4 +461,66 @@ class MomentumStrategyTest {
                 .as("a hold-off that never expires would silently drop a valid setup for the day")
                 .isTrue();
     }
+
+    /**
+     * An armed setup must not trigger when the last candle close refused it.
+     *
+     * <p>The trigger-time recheck deliberately covers only the price-derived conditions, because
+     * relative strength and the EMA pair are computed from completed candles and cannot change
+     * between them. That reasoning is right, and it is exactly what made ignoring them wrong: the
+     * close had already said no, and the tick path never asked.</p>
+     *
+     * <p>Seen live — a stock sat ARMED for fourteen minutes failing notOutperformingIndex on every
+     * close, and would have entered the moment it broke out.</p>
+     */
+    @Test
+    void anArmedSetupDoesNotTriggerWhileTheLastCloseRefusedIt() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+
+        // A close where the stock has stopped leading the index. Everything else still holds.
+        SharedInstrumentState lagging = new SharedInstrumentState(SYMBOL, 1000, 1010,
+                trigger + 2, 1005, trigger + 0.5, 5_000_000,
+                trigger - 3, trigger - 1, trigger - 4, 4.0,
+                0.1, 0.3, 0.5, 1.4, 1.5, 5, 9, -0.4, 0, NOW);
+        strategy.onCandleClosed(account, lagging, flatHistory(25, trigger));
+
+        StrategySignal signal = strategy.onTick(account, lagging, tickAt(trigger + 0.5));
+
+        assertThat(signal.isIntent())
+                .as("the most recent close refused this stock on a mandatory condition")
+                .isFalse();
+        assertThat(signal.condition()).isEqualTo("mandatoryFailedAtLastClose");
+    }
+
+    /**
+     * An armed setup ages on every close, not only on the ones that reach the state machine.
+     *
+     * <p>Ageing used to sit after the mandatory check, which returns early — so a setup whose
+     * mandatory conditions were failing never aged, and could wait indefinitely on a level set long
+     * before. One was found still ARMED fourteen bars past a ten-bar limit.</p>
+     */
+    @Test
+    void anArmedSetupExpiresEvenWhileMandatoryConditionsAreFailing() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState lagging = new SharedInstrumentState(SYMBOL, 1000, 1010,
+                trigger + 2, 1005, trigger + 0.5, 5_000_000,
+                trigger - 3, trigger - 1, trigger - 4, 4.0,
+                0.1, 0.3, 0.5, 1.4, 1.5, 5, 9, -0.4, 0, NOW);
+
+        // Collected rather than sampled at the end: once it expires the setup is IDLE and every
+        // later close refuses it on the mandatory condition again, hiding the expiry.
+        List<String> conditions = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            conditions.add(strategy.onCandleClosed(account, lagging, flatHistory(25, trigger))
+                    .condition());
+        }
+
+        assertThat(conditions)
+                .as("a stale armed setup must not survive its bar limit by failing a check earlier")
+                .contains("armedTooLong");
+        assertThat(strategy.setupFor(account.userId(), SYMBOL).state())
+                .isEqualTo(MomentumState.IDLE);
+    }
 }

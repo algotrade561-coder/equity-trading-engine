@@ -101,7 +101,23 @@ public class MomentumStrategy {
                     minutes.size() + " completed minutes");
         }
 
+        // Aged here rather than inside the state machine. Down there it sat after the mandatory
+        // check, which returns early — so a setup whose mandatory conditions were failing never
+        // aged at all, and one was still ARMED fourteen bars past a ten-bar limit.
+        if (setup.state() == MomentumState.ARMED) {
+            setup.countArmedBar();
+            if (setup.barsSinceArmed() > MAX_BARS_ARMED) {
+                invalidate(setup, now);
+                return StrategySignal.reject(RejectionStage.ARMING, "armedTooLong",
+                        setup.barsSinceArmed() + " bars without a trigger");
+            }
+        }
+
         StrategySignal mandatory = checkMandatory(state, t, setup, now);
+        // Remembered for the tick path. Without this an armed setup stayed triggerable while the
+        // most recent close had already refused it on a mandatory condition.
+        setup.recordMandatory(!mandatory.isRejected(),
+                mandatory.isRejected() ? mandatory.condition() + ": " + mandatory.detail() : "");
         if (mandatory.isRejected()) return mandatory;
 
         if (setup.inCooldown(now)) {
@@ -228,9 +244,13 @@ public class MomentumStrategy {
         Candle last = minutes.get(minutes.size() - 1);
 
         if (last.low() < setup.structureLow()) {
+            // Captured before invalidating, which zeroes it. Reading it afterwards made every one
+            // of these read "x < 0.00" — cosmetic in a log, but it destroyed the one number that
+            // says how far the pause actually broke, which is what the journal exists to keep.
+            double brokenLow = setup.structureLow();
             invalidate(setup, now);
             return StrategySignal.reject(RejectionStage.CONSOLIDATION, "pauseLowBroken",
-                    String.format("%.2f < %.2f", last.low(), setup.structureLow()));
+                    String.format("%.2f < %.2f", last.low(), brokenLow));
         }
         setup.extendPause(last.low());
 
@@ -244,15 +264,14 @@ public class MomentumStrategy {
         return StrategySignal.NOTHING;
     }
 
+    /**
+     * Nothing to do but wait for a tick through the trigger.
+     *
+     * <p>Ageing used to live here. It was moved ahead of the mandatory check, which returns early:
+     * a setup failing a mandatory condition never reached this method, so it never aged and could
+     * sit armed indefinitely on a level set long before.</p>
+     */
     private StrategySignal holdArmed(SharedInstrumentState s, SetupState setup, java.time.Instant now) {
-        setup.countArmedBar();
-        if (setup.barsSinceArmed() > MAX_BARS_ARMED) {
-            // A breakout that has not happened in ten minutes is a different trade from the one
-            // that was armed. Re-arming from scratch is honest; waiting indefinitely is not.
-            invalidate(setup, now);
-            return StrategySignal.reject(RejectionStage.ARMING, "armedTooLong",
-                    setup.barsSinceArmed() + " bars without a trigger");
-        }
         return StrategySignal.NOTHING;
     }
 
@@ -271,6 +290,15 @@ public class MomentumStrategy {
         // Silence, not a rejection: this setup already produced an intent that went nowhere, and
         // counting every suppressed tick would swamp the rejection log with one symbol.
         if (setup.inRetriggerHoldOff(clock.now())) return StrategySignal.NOTHING;
+
+        // The most recent close refused this stock on a condition that cannot change between
+        // closes — relative strength and the EMA pair are computed from completed candles. The
+        // trigger-time recheck below covers only the price-derived ones, correctly, which is
+        // precisely why the rest have to be honoured from the close that evaluated them.
+        if (!setup.mandatoryOk()) {
+            return StrategySignal.reject(RejectionStage.TRIGGER, "mandatoryFailedAtLastClose",
+                    setup.mandatoryFailure());
+        }
 
         if (tick.lastPrice() < setup.triggerLevel()) {
             return StrategySignal.NOTHING;   // not yet — silence, not a rejection

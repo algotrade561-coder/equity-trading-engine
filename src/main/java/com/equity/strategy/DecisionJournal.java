@@ -94,6 +94,22 @@ public class DecisionJournal {
                 + "}");
     }
 
+    /**
+     * An entry the strategy authorised that risk then refused.
+     *
+     * <p>Without this the funnel stops at the strategy boundary, and "the setup was found but no
+     * order was placed" has no recorded answer — margin, spread, the attempt cap and the loss latch
+     * all look identical from the outside. Answering it once meant querying the database by hand.</p>
+     */
+    public void riskDenial(UserId userId, SharedInstrumentState state, SetupState setup,
+                           String reason, String detail) {
+        if (!enabled) return;
+        offer(row("riskDenial", userId, state, setup)
+                + ",\"reason\":" + quote(reason)
+                + ",\"detail\":" + quote(detail)
+                + "}");
+    }
+
     /** A setup advancing or dying. These rows are what make the day a funnel rather than a tally. */
     public void transition(UserId userId, SharedInstrumentState state, SetupState setup,
                            String from, String to) {

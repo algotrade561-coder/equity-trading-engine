@@ -236,6 +236,9 @@ public class SessionOrchestrator {
         if (!decision.approved()) {
             rejections.recordRiskDenial(account.userId(), state.symbol(),
                     decision.denialReason(), decision.note());
+            journal.riskDenial(account.userId(), state,
+                    strategy.setupFor(account.userId(), state.symbol()),
+                    decision.denialReason().name(), decision.note());
             strategy.onEntryAbandoned(account.userId(), state.symbol());
             return;
         }
