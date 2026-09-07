@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tests log to the console only.
+
+  Without this, a test run appends to logs/equity.log — the same file a live session is writing.
+  That is not merely untidy. Test fixtures deliberately exercise the alarming paths, so a build run
+  during market hours injects lines like
+
+      ERROR ... ORPHAN POSITION ... RELIANCE: the broker holds 50 intraday share(s)
+      WARN  ... reconciliation for ... could not read broker state: broker down
+      INFO  ... ENTRY ... RELIANCE x100 MIS stop 990.0
+
+  into the operator's log, interleaved with the real session and indistinguishable from it. An
+  operator scanning for trouble would find a fabricated orphan position and a fabricated entry in a
+  stock the engine never touched. It happened; that is why this file exists.
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} -- %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Chatty during tests and never the reason one fails. -->
+  <logger name="com.equity.trading" level="WARN"/>
+  <logger name="com.equity.risk" level="WARN"/>
+  <logger name="org.hibernate" level="WARN"/>
+  <logger name="com.zaxxer.hikari" level="WARN"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

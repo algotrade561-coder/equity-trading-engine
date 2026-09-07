@@ -27,17 +27,27 @@ public class StatusController {
     private final TradingClock clock;
     private final KiteProperties kite;
     private final KiteTickerManager tickers;
+    private final com.equity.broker.kite.KiteSessionStore sessions;
+    private final com.equity.broker.kite.KiteCredentialsProvider credentials;
+    private final com.equity.platform.security.CurrentUser currentUser;
     private final MarketDataRouter router;
     private final UniverseService universe;
     private final UserRegistry users;
     private final PositionBook positions;
 
     public StatusController(EngineProperties props, TradingClock clock, KiteProperties kite,
-                            KiteTickerManager tickers, MarketDataRouter router,
+                            KiteTickerManager tickers,
+                            com.equity.broker.kite.KiteSessionStore sessions,
+                            com.equity.broker.kite.KiteCredentialsProvider credentials,
+                            com.equity.platform.security.CurrentUser currentUser,
+                            MarketDataRouter router,
                             UniverseService universe, UserRegistry users, PositionBook positions) {
         this.props = props;
         this.clock = clock;
         this.kite = kite;
+        this.sessions = sessions;
+        this.credentials = credentials;
+        this.currentUser = currentUser;
         this.tickers = tickers;
         this.router = router;
         this.universe = universe;
@@ -50,13 +60,18 @@ public class StatusController {
         // Configured, connected and trading are three different things, and the checklist should not
         // blur them: an unconfigured broker is a deployment gap, a configured one with no session is
         // a login the operator still owes us.
+        // "Configured" must mean what the engine actually resolves at call time, not what is in
+        // the config file. Credentials moved to a per-user encrypted store and the application-wide
+        // pair is now empty by design, so asking KiteProperties reported NOT_CONFIGURED forever —
+        // and because it was tested before connection state, it hid whether a login was even owed.
         String broker = !kite.isEnabled() ? "DISABLED"
-                : !kite.isConfigured() ? "NOT_CONFIGURED"
-                : tickers.isConnected() ? "CONNECTED" : "AWAITING_LOGIN";
+                : tickers.isConnected() ? "CONNECTED"
+                : !hasCredentials() ? "NOT_CONFIGURED"
+                : hasSessionToday() ? "AWAITING_FEED" : "AWAITING_LOGIN";
 
         LocalTime now = clock.timeOfDay();
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("service", "equity");
+        m.put("service", "EquityEngine");
         m.put("version", "0.1.0-SNAPSHOT");
         m.put("mode", props.getMode());
         m.put("tradingEnabled", props.isTradingEnabled());
@@ -76,6 +91,20 @@ public class StatusController {
                 "NO_ARMED_USER", "wired, but nobody is permitted to trade so it never acts",
                 "SHADOW_ONLY", "evaluating and recording, but nobody is armed so nothing is sent"));
         return m;
+    }
+
+    /** Whether the signed-in user has an api key and secret the engine can actually resolve. */
+    private boolean hasCredentials() {
+        return currentUser.id().map(id -> credentials.find(id).isPresent())
+                .orElseGet(() -> kite.isConfigured());
+    }
+
+    /**
+     * A stored session valid for today. Distinguishes "log in" from "the feed has not come up yet",
+     * which are different problems with different fixes.
+     */
+    private boolean hasSessionToday() {
+        return currentUser.id().map(sessions::isAuthenticated).orElse(false);
     }
 
     /**
