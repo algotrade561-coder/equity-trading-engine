@@ -23,6 +23,7 @@ import com.equity.risk.MarginCache;
 import com.equity.risk.MarginRequirements;
 import com.equity.risk.RiskEngine;
 import com.equity.strategy.MomentumStrategy;
+import com.equity.strategy.DecisionJournal;
 import com.equity.strategy.RejectionLog;
 import com.equity.strategy.StrategySignal;
 import com.equity.trading.PositionBook;
@@ -84,11 +85,13 @@ public class SessionOrchestrator {
     private final InstrumentFreshness freshness;
     private final MomentumStrategy strategy;
     private final RejectionLog rejections;
+    private final DecisionJournal journal;
     private final RiskEngine risk;
     private final AccountLedger ledger;
     private final MarginCache margins;
     private final MarginRequirements requirements;
     private final Reconciler reconciler;
+    private final SessionBackfill backfill;
     private final PositionBook positions;
     private final PositionLifecycle lifecycle;
     private final UserRegistry users;
@@ -104,9 +107,11 @@ public class SessionOrchestrator {
                                UniverseProperties universeProperties,
                                IndexConstituentSource constituents,
                                InstrumentFreshness freshness, MomentumStrategy strategy,
-                               RejectionLog rejections, RiskEngine risk, AccountLedger ledger,
+                               RejectionLog rejections, DecisionJournal journal,
+                               RiskEngine risk, AccountLedger ledger,
                                MarginCache margins, MarginRequirements requirements,
-                               Reconciler reconciler, PositionBook positions,
+                               Reconciler reconciler, SessionBackfill backfill,
+                               PositionBook positions,
                                PositionLifecycle lifecycle, UserRegistry users, TradingClock clock) {
         this.marketData = marketData;
         this.orderUpdates = orderUpdates;
@@ -119,11 +124,13 @@ public class SessionOrchestrator {
         this.freshness = freshness;
         this.strategy = strategy;
         this.rejections = rejections;
+        this.journal = journal;
         this.risk = risk;
         this.ledger = ledger;
         this.margins = margins;
         this.requirements = requirements;
         this.reconciler = reconciler;
+        this.backfill = backfill;
         this.positions = positions;
         this.lifecycle = lifecycle;
         this.users = users;
@@ -185,9 +192,16 @@ public class SessionOrchestrator {
             StrategySignal signal = strategy.onTick(account, state.get(), tick);
             if (signal.isRejected()) {
                 rejections.recordStrategyRejection(account.userId(), tick.symbol(), signal);
+                journal.rejection(account.userId(), state.get(), signal,
+                        strategy.setupFor(account.userId(), tick.symbol()));
                 continue;
             }
             if (!signal.isIntent()) continue;
+
+            journal.intent(account.userId(), state.get(),
+                    strategy.setupFor(account.userId(), tick.symbol()),
+                    signal.intent().referencePrice(), signal.intent().stopPrice(),
+                    signal.intent().targetPrice(), account.mayOpen());
 
             if (account.mayOpen()) {
                 attemptEntry(account, signal, state.get(), tick);
@@ -247,9 +261,24 @@ public class SessionOrchestrator {
         for (UserAccount account : users.evaluable()) {
             checkStructureExit(account, state.get());
 
+            // Captured either side of the evaluation so the journal records a funnel rather than a
+            // tally: without transitions, one setup dying repeatedly is indistinguishable from many
+            // setups failing once, and those imply opposite things about a threshold.
+            var setup = strategy.setupFor(account.userId(), candle.symbol());
+            String before = setup.state().name();
+
             StrategySignal signal = strategy.onCandleClosed(account, state.get(), minutes);
+
+            String after = setup.state().name();
+            if (!before.equals(after)) {
+                journal.transition(account.userId(), state.get(), setup, before, after);
+                log.info("SETUP {} {} {} -> {}{}", account.userId(), candle.symbol(), before, after,
+                        setup.pattern() == null ? "" : " (" + setup.pattern() + ")");
+            }
+
             if (signal.isRejected()) {
                 rejections.recordStrategyRejection(account.userId(), candle.symbol(), signal);
+                journal.rejection(account.userId(), state.get(), signal, setup);
             }
         }
     }
@@ -287,6 +316,9 @@ public class SessionOrchestrator {
     public void fastLoop() {
         router.closeStaleBuckets();
         lifecycle.drainExits();
+        // Off the feed thread on purpose: a slow disk here would stall every instrument behind one
+        // write, and Kite drops a client that falls behind.
+        journal.flush();
     }
 
     /** Re-ranks the board and moves the depth subscription to follow it. */
@@ -366,6 +398,11 @@ public class SessionOrchestrator {
 
     public boolean isFeedUp() { return feedUp; }
 
+    /** The user whose broker session carries the feed, if any is registered. */
+    private java.util.Optional<com.equity.domain.user.UserId> sessions() {
+        return users.all().stream().map(UserAccount::userId).findFirst();
+    }
+
     /** Reacts to the feed going up and down. */
     private final class FeedListener implements FeedStatusListener {
 
@@ -384,6 +421,12 @@ public class SessionOrchestrator {
                         : universeProperties.getSymbols();
 
                 universe.subscribeUniverse(symbols);
+
+                // Load the session's completed bars behind the live feed. Without it a process
+                // started mid-session computes VWAP from its own start time, which is not VWAP and
+                // never becomes it — and VWAP is a mandatory entry gate.
+                sessions().ifPresent(backfill::startFor);
+
                 universe.recordUnresolved(
                         new java.util.ArrayList<>(marketData.unresolvedSymbols()),
                         marketData::suggestionsFor);
