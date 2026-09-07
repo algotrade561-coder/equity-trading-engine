@@ -63,8 +63,10 @@ export function App() {
     <div className="shell">
       <nav className="nav">
         <div className="nav-brand">
-          <h1>equity</h1>
-          <div className="sub">intraday momentum engine</div>
+          {/* Two-tone rather than one weight: at 1.05rem a single-colour compound word reads as
+              one long token, and the eye has nothing to land on. */}
+          <h1><span className="mark">Equity</span>Engine</h1>
+          <div className="sub">NSE Intraday Momentum</div>
         </div>
 
         <div className="nav-links">
@@ -128,8 +130,8 @@ function SignIn({ me }: { me: Me }) {
   return (
     <div className="center-screen">
       <div className="card" style={{ maxWidth: '26rem' }}>
-        <h3>equity</h3>
-        <p className="hint">Intraday momentum engine</p>
+        <h3><span className="mark">Equity</span>Engine</h3>
+        <p className="hint">NSE intraday momentum · live trading console</p>
         <a href={me.loginUrl ?? '/oauth2/authorization/google'}>
           <button className="primary" style={{ width: '100%' }}>Sign in with Google</button>
         </a>
