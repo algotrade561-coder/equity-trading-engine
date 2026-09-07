@@ -416,4 +416,49 @@ class MomentumStrategyTest {
         return new Tick(SYMBOL, price, 5_000_000, price - 0.2, price + 0.2,
                 1010, 1040, 1005, 1000, NOW, NOW);
     }
+
+    /**
+     * The retry storm from the first live morning.
+     *
+     * <p>An authorised entry that fails to become a position calls {@code onEntryAbandoned}, which
+     * re-armed the setup and nothing more. The price was still above the trigger, so the next tick
+     * fired again — twelve orders for one stock in under seven seconds, stopped only because the
+     * daily attempt cap ran out, followed by five hundred further intents the cap then refused.</p>
+     *
+     * <p>The setup is genuinely still valid, so re-arming is right. Firing again on the very next
+     * tick is not: whatever refused the entry needs time to change.</p>
+     */
+    @Test
+    void anAbandonedEntryDoesNotRetriggerOnTheNextTick() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("the first trigger is the trade")
+                .isTrue();
+
+        strategy.onEntryAbandoned(account.userId(), SYMBOL);
+
+        for (int i = 0; i < 50; i++) {
+            assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                    .as("tick %d after the abandoned entry still submitted an order", i)
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void theSetupBecomesTradeableAgainOnceTheHoldOffPasses() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        strategy.onTick(account, state, tickAt(trigger + 0.5));
+        strategy.onEntryAbandoned(account.userId(), SYMBOL);
+        clock.advance(java.time.Duration.ofMinutes(3));
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("a hold-off that never expires would silently drop a valid setup for the day")
+                .isTrue();
+    }
 }

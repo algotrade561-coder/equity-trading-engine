@@ -48,6 +48,11 @@ public class MomentumStrategy {
     private static final int MAX_BARS_ARMED = 10;
     /** After an invalidation, wait before rebuilding a setup on the same symbol. */
     private static final Duration INVALIDATION_COOLDOWN = Duration.ofMinutes(3);
+    /**
+     * After an authorised entry fails to become a position, how long before the same setup may
+     * trigger again. Whatever refused it needs time to change; retrying on the next tick cannot help.
+     */
+    private static final Duration ENTRY_RETRY_HOLD_OFF = Duration.ofMinutes(2);
 
     private final TradingClock clock;
     private final Map<String, SetupState> setups = new ConcurrentHashMap<>();
@@ -263,6 +268,10 @@ public class MomentumStrategy {
         SetupState setup = setupFor(account.userId(), state.symbol());
         if (!setup.isArmed()) return StrategySignal.NOTHING;
 
+        // Silence, not a rejection: this setup already produced an intent that went nowhere, and
+        // counting every suppressed tick would swamp the rejection log with one symbol.
+        if (setup.inRetriggerHoldOff(clock.now())) return StrategySignal.NOTHING;
+
         if (tick.lastPrice() < setup.triggerLevel()) {
             return StrategySignal.NOTHING;   // not yet — silence, not a rejection
         }
@@ -359,7 +368,8 @@ public class MomentumStrategy {
 
     /** Called when an entry attempt did not become a position, so the setup can be tried again. */
     public void onEntryAbandoned(UserId userId, String symbol) {
-        setupFor(userId, symbol).moveTo(MomentumState.ARMED, clock.now());
+        java.time.Instant now = clock.now();
+        setupFor(userId, symbol).holdOffUntil(now.plus(ENTRY_RETRY_HOLD_OFF), now);
     }
 
     private void invalidate(SetupState setup, java.time.Instant now) {

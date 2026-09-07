@@ -30,6 +30,14 @@ public class SetupState {
     private int barsSinceArmed;
     private Instant enteredStateAt;
     private Instant cooldownUntil;
+    /**
+     * Earliest moment an armed setup may trigger again after an entry was abandoned.
+     *
+     * <p>Separate from {@link #cooldownUntil}, which suppresses rebuilding an invalidated setup.
+     * This one suppresses re-firing a setup that is still perfectly valid but whose entry did not
+     * get placed.</p>
+     */
+    private Instant retriggerAfter;
 
     public MomentumState state()        { return state; }
     public EntryPattern pattern()       { return pattern; }
@@ -40,6 +48,31 @@ public class SetupState {
     public int barsSinceArmed()         { return barsSinceArmed; }
     public Instant enteredStateAt()     { return enteredStateAt; }
     public Instant cooldownUntil()      { return cooldownUntil; }
+    public Instant retriggerAfter()     { return retriggerAfter; }
+
+    /**
+     * Re-arms after an entry that was authorised but never became a position.
+     *
+     * <p>The setup itself is still valid — the price is above the trigger and the structure holds —
+     * so returning it to ARMED is right. Returning it to ARMED <b>and nothing else</b> was not: the
+     * next tick is still above the trigger, so it fires again immediately, and again, for as long as
+     * the price stays there. On the first live morning that submitted twelve orders for one stock in
+     * under seven seconds, stopped only by the daily attempt cap, and then produced five hundred
+     * further intents that the cap refused.</p>
+     *
+     * <p>The hold-off makes a repeat deliberate rather than automatic. Whatever refused the entry —
+     * a wide spread, a margin shortfall, a broker that will not accept orders at all — is a
+     * condition that needs time to change, and retrying it hundreds of times a second cannot help.</p>
+     */
+    public void holdOffUntil(Instant until, Instant at) {
+        this.retriggerAfter = until;
+        moveTo(MomentumState.ARMED, at);
+    }
+
+    /** True while a re-trigger is suppressed after an abandoned entry. */
+    public boolean inRetriggerHoldOff(Instant now) {
+        return retriggerAfter != null && now.isBefore(retriggerAfter);
+    }
 
     public void moveTo(MomentumState next, Instant at) {
         if (this.state != next) {
