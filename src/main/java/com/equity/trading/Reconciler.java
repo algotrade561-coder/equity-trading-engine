@@ -63,12 +63,33 @@ public class Reconciler {
      */
     private static final Duration GRACE = Duration.ofSeconds(90);
 
+    /**
+     * How long after the engine closes a position the broker may still report it as held.
+     *
+     * <p>Kite's positions endpoint lags its own fills. Twenty-six seconds after the engine sold TEGA
+     * at its target and booked the trade, reconciliation read 91 shares still standing and raised an
+     * orphan — telling an operator to go and manually close a position that no longer existed. A
+     * false alarm on this path is worse than none: it invites exactly the intervention it should
+     * prevent.</p>
+     */
+    private static final Duration SETTLING = Duration.ofMinutes(2);
+
     private final BrokerPort broker;
     private final PositionBook book;
     private final PositionLifecycle lifecycle;
     private final TradingClock clock;
 
     private final Map<UserId, Report> reports = new ConcurrentHashMap<>();
+
+    /**
+     * Last traded price per symbol. Supplied as a function so this class keeps no opinion about
+     * where market data lives, the same way the position lifecycle takes its ATR.
+     */
+    private volatile java.util.function.ToDoubleFunction<String> lastPrice = symbol -> 0.0;
+
+    public void setLastPriceSource(java.util.function.ToDoubleFunction<String> source) {
+        this.lastPrice = source;
+    }
 
     public Reconciler(BrokerPort broker, PositionBook book, PositionLifecycle lifecycle,
                       TradingClock clock) {
@@ -140,7 +161,7 @@ public class Reconciler {
         int adopted = lifecycle.resolveUnconfirmed(userId, orders, GRACE).size();
         int resolved = replayMissedOrderUpdates(userId, orders, account);
         int abandoned = abandonEntriesTheBrokerNeverSaw(userId, orders, now);
-        Outcome exposure = reconcileExposure(userId, brokerPositions);
+        Outcome exposure = reconcileExposure(userId, brokerPositions, orders, now);
 
         Report report = new Report(now, orders.size(), brokerPositions.size(), resolved, adopted,
                 exposure.externalCloses(), abandoned, exposure.orphans(), null);
@@ -227,6 +248,35 @@ public class Reconciler {
         return abandoned;
     }
 
+    /**
+     * The price a position actually closed at, when the engine did not close it.
+     *
+     * <p>Preference order, and the order matters. A completed sell for this symbol in today's order
+     * list is the broker's own record of the fill and is therefore the truth. Failing that the last
+     * traded price is a fair approximation of a close that has just happened. Only with neither does
+     * the caller fall back — and it now says so instead of booking the trade flat.</p>
+     *
+     * <p>Deliberately not matched on tag: this exists for exits the engine did not send, so there is
+     * no engine tag to match. Quantity and side are what identify it.</p>
+     */
+    private double exitPriceFor(Position position, List<BrokerOrder> orders) {
+        Optional<BrokerOrder> fill = orders.stream()
+                .filter(o -> position.symbol().equals(o.symbol()))
+                .filter(o -> o.status() == OrderStatus.COMPLETE)
+                .filter(o -> o.side() != sideOfEntry(position))
+                .filter(o -> o.filledQuantity() > 0 && o.averagePrice() > 0)
+                .max(java.util.Comparator.comparing(
+                        o -> o.updatedAt() == null ? Instant.EPOCH : o.updatedAt()));
+        if (fill.isPresent()) return fill.get().averagePrice();
+
+        return lastPrice.applyAsDouble(position.symbol());
+    }
+
+    private static com.equity.broker.OrderSide sideOfEntry(Position position) {
+        return position.direction() == com.equity.domain.Direction.LONG
+                ? com.equity.broker.OrderSide.BUY : com.equity.broker.OrderSide.SELL;
+    }
+
     private record Outcome(int externalCloses, List<String> orphans) {}
 
     /**
@@ -236,7 +286,8 @@ public class Reconciler {
      * has nothing to do with this engine; counting it would make every long-term holding look like
      * an orphan every sixty seconds.</p>
      */
-    private Outcome reconcileExposure(UserId userId, List<BrokerPosition> brokerPositions) {
+    private Outcome reconcileExposure(UserId userId, List<BrokerPosition> brokerPositions,
+                                      List<BrokerOrder> orders, Instant now) {
         Map<String, Integer> heldAtBroker = new HashMap<>();
         Map<String, Double> priceAtBroker = new HashMap<>();
         for (BrokerPosition bp : brokerPositions) {
@@ -255,8 +306,7 @@ public class Reconciler {
                 // The broker holds nothing here. Whatever closed it, the engine did not, and
                 // leaving it OPEN would occupy a position slot and invite an exit for shares that
                 // no longer exist.
-                lifecycle.adoptExternalClose(position, priceAtBroker
-                                .getOrDefault(position.symbol(), 0.0),
+                lifecycle.adoptExternalClose(position, exitPriceFor(position, orders),
                         "the broker reports no intraday position in " + position.symbol());
                 externalCloses++;
                 continue;
@@ -279,6 +329,17 @@ public class Reconciler {
             int unaccounted = Math.abs(entry.getValue())
                     - claimedByEngine.getOrDefault(entry.getKey(), 0);
             if (unaccounted <= 0) continue;
+
+            // A position this engine closed moments ago is not an orphan; the broker's view simply
+            // has not caught up. Without this the engine reports its own completed trade as a
+            // holding somebody must deal with by hand.
+            var closedAt = book.lastClosedAt(userId, entry.getKey());
+            if (closedAt.isPresent() && closedAt.get().isAfter(now.minus(SETTLING))) {
+                log.debug("{} still shows {} share(s) at the broker {}s after the engine closed it "
+                        + "— within the settling window, not an orphan", entry.getKey(),
+                        unaccounted, Duration.between(closedAt.get(), now).toSeconds());
+                continue;
+            }
 
             orphans.add(entry.getKey() + " x" + unaccounted);
             log.error("ORPHAN POSITION {} {}: the broker holds {} intraday share(s) this engine "

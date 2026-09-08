@@ -407,4 +407,43 @@ class PositionLifecycleTest {
         assertThat(book.withExposure(account.userId()))
                 .allMatch(p -> p.status() == PositionStatus.EXIT_PENDING);
     }
+
+    /**
+     * A fill has to be announced, or nothing downstream can count it.
+     *
+     * <p>{@code AccountLedger.recordFill} existed, was tested, and was called from nowhere in the
+     * engine. After a session of eight filled positions the ledger still read {@code fills 0}, so
+     * every hit rate derived from it was zero. The book already knows the moment an entry fills; it
+     * simply never said so.</p>
+     */
+    @Test
+    void theBookAnnouncesAFillSoTheLedgerCanCountIt() {
+        java.util.List<Position> filled = new java.util.ArrayList<>();
+        book.onOpened(filled::add);
+
+        Position position = lifecycle.open(account, intent(), approval(), account.epoch()).position();
+        assertThat(filled).as("submitting is not filling").isEmpty();
+
+        lifecycle.onOrderUpdate(account.userId(), fill(position.entryTag().value(), 100, 1000), account);
+
+        assertThat(filled).hasSize(1);
+        assertThat(filled.get(0).symbol()).isEqualTo("RELIANCE");
+    }
+
+    /** An exit that failed puts the position back to OPEN; that is not a second fill. */
+    @Test
+    void aFailedExitDoesNotCountAsAnotherFill() {
+        java.util.List<Position> filled = new java.util.ArrayList<>();
+        Position open = openAndFill();
+        book.onOpened(filled::add);
+
+        lifecycle.requestExit(open, ExitReason.MANUAL, "test");
+        lifecycle.drainExits();
+        Position exiting = book.byId(open.id()).orElseThrow();
+        lifecycle.onOrderUpdate(account.userId(), new BrokerOrder("x1", "RELIANCE", OrderSide.SELL,
+                OrderStatus.REJECTED, 100, 0, 0, "no", NOW, exiting.exitTag().value()), account);
+
+        assertThat(book.byId(open.id()).orElseThrow().status()).isEqualTo(PositionStatus.OPEN);
+        assertThat(filled).as("only the transition out of PENDING_ENTRY is a fill").isEmpty();
+    }
 }

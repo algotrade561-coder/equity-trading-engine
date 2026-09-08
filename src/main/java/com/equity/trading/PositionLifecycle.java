@@ -407,10 +407,28 @@ public class PositionLifecycle {
      */
     public synchronized void adoptExternalClose(Position position, double price, String note) {
         if (!position.hasExposure()) return;
-        double at = price > 0 ? price : position.entryPrice();
+
+        // Falling back to the entry price books the trade at exactly zero, which is the one answer
+        // guaranteed to be wrong. It happened: a position closed by hand in the terminal was
+        // recorded flat, and its real result vanished from the day's realised total. The caller
+        // supplies the best price it can find — the broker's own fill for the exit if it can be
+        // identified, otherwise the last traded price — and only a complete absence of any price
+        // falls back, now saying so rather than passing it off as a result.
+        boolean known = price > 0;
+        double at = known ? price : position.entryPrice();
         book.put(position.withClose(at, ExitReason.MANUAL, clock.now()));
-        log.warn("EXTERNALLY CLOSED {} {} at {} — {}. The engine did not send this exit.",
-                position.userId(), position.symbol(), at, note);
+
+        if (known) {
+            log.warn("EXTERNALLY CLOSED {} {} at {} pnl {} — {}. The engine did not send this exit.",
+                    position.userId(), position.symbol(), at,
+                    String.format("%.2f", position.withClose(at, ExitReason.MANUAL,
+                            clock.now()).realisedPnl()), note);
+        } else {
+            log.error("EXTERNALLY CLOSED {} {} but no exit price could be established, so it is "
+                    + "booked flat at the entry of {}. THE REALISED P&L FOR THIS TRADE IS WRONG — "
+                    + "take it from the broker's contract note. {}",
+                    position.userId(), position.symbol(), at, note);
+        }
     }
 
     /**

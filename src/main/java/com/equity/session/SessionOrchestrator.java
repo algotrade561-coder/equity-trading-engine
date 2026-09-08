@@ -146,6 +146,15 @@ public class SessionOrchestrator {
         orderUpdates.addOrderUpdateListener((userId, order) ->
                 lifecycle.onOrderUpdate(userId, order, users.find(userId).orElse(null)));
 
+        // The ledger has counted fills since it was written and nothing ever told it about one, so
+        // every hit rate derived from it read zero. The book already announces a fill by moving a
+        // position to OPEN; this is simply the wire that was missing.
+        positions.onOpened(position -> ledger.recordFill(position.userId()));
+        reconciler.setLastPriceSource(symbol -> {
+            Tick last = router.lastTick(symbol);
+            return last == null ? 0 : last.lastPrice();
+        });
+
         router.onTick(this::onTick);
         candles.onCandleClosed(this::onCandleClosed);
 

@@ -372,4 +372,80 @@ class ReconcilerTest {
         return book.byId(position.id()).orElseThrow();
     }
 
+
+    // ── Closed by hand, and the aftermath ────────────────────────────────────
+
+    /**
+     * A position closed in the broker terminal must book the price it actually closed at.
+     *
+     * <p>It booked the entry price instead, which is the one answer guaranteed to be wrong: the
+     * trade was recorded flat at exactly zero and its real result vanished from the day's realised
+     * total. The broker's own completed sell is the truth and it is already in the order list that
+     * reconciliation fetched.</p>
+     */
+    @Test
+    void anExternallyClosedPositionIsBookedAtTheBrokersOwnFill() {
+        Position open = openAndFill();
+        broker.orders.add(new BrokerOrder("manual-1", "RELIANCE", OrderSide.SELL,
+                OrderStatus.COMPLETE, 100, 100, 1042.50, "", NOW, "not-an-engine-tag"));
+
+        reconciler.reconcile(account);
+
+        Position closed = book.byId(open.id()).orElseThrow();
+        assertThat(closed.status()).isEqualTo(PositionStatus.CLOSED);
+        assertThat(closed.exitPrice())
+                .as("the broker's fill, not the entry price")
+                .isEqualTo(1042.50);
+        assertThat(closed.realisedPnl())
+                .as("booking it flat would erase a real result from the day")
+                .isEqualTo((1042.50 - 1000) * 100);
+    }
+
+    /** With no broker fill to match, the live price beats booking the trade flat. */
+    @Test
+    void withoutABrokerFillItFallsBackToTheLastTradedPrice() {
+        Position open = openAndFill();
+        reconciler.setLastPriceSource(symbol -> 1035.0);
+
+        reconciler.reconcile(account);
+
+        assertThat(book.byId(open.id()).orElseThrow().exitPrice()).isEqualTo(1035.0);
+    }
+
+    /**
+     * The broker's positions endpoint lags its own fills.
+     *
+     * <p>Twenty-six seconds after the engine sold TEGA at its target and booked the trade,
+     * reconciliation read 91 shares still standing and raised an orphan — telling an operator to go
+     * and manually close a position that no longer existed. A false alarm here is worse than none:
+     * it invites exactly the intervention it exists to prevent.</p>
+     */
+    @Test
+    void aPositionTheEngineJustClosedIsNotAnOrphan() {
+        Position open = openAndFill();
+        lifecycle.adoptExternalClose(open, 1010, "closed by the test");
+        // The broker has not caught up and still reports the shares.
+        broker.positions.add(held(100, 1010));
+
+        clock.advance(Duration.ofSeconds(30));
+        Reconciler.Report report = reconciler.reconcile(account);
+
+        assertThat(report.orphans())
+                .as("the engine closed this itself half a minute ago")
+                .isEmpty();
+    }
+
+    @Test
+    void butItIsAnOrphanOnceTheSettlingWindowHasPassed() {
+        Position open = openAndFill();
+        lifecycle.adoptExternalClose(open, 1010, "closed by the test");
+        broker.positions.add(held(100, 1010));
+
+        clock.advance(Duration.ofMinutes(5));
+        Reconciler.Report report = reconciler.reconcile(account);
+
+        assertThat(report.orphans())
+                .as("shares still held five minutes later are genuinely unaccounted for")
+                .containsExactly("RELIANCE x100");
+    }
 }

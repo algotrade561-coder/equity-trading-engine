@@ -35,6 +35,7 @@ public class PositionBook {
     private final Map<UUID, Position> positions = new ConcurrentHashMap<>();
     private final Map<String, Instant> lastClosedBySymbol = new ConcurrentHashMap<>();
     private final List<Consumer<Position>> closedListeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<Position>> openedListeners = new CopyOnWriteArrayList<>();
 
     @org.springframework.beans.factory.annotation.Autowired
     public PositionBook(PositionStore store) {
@@ -68,9 +69,23 @@ public class PositionBook {
         closedListeners.add(listener);
     }
 
+    /**
+     * Notified once per position when its entry fills.
+     *
+     * <p>Fires only on the transition out of PENDING_ENTRY, so an exit that failed and put the
+     * position back to OPEN does not read as a second fill.</p>
+     */
+    public void onOpened(Consumer<Position> listener) {
+        openedListeners.add(listener);
+    }
+
     public void put(Position position) {
         Position previous = positions.put(position.id(), position);
         store.save(position);
+        boolean justOpened = position.status() == PositionStatus.OPEN
+                && previous != null && previous.status() == PositionStatus.PENDING_ENTRY;
+        if (justOpened) openedListeners.forEach(l -> l.accept(position));
+
         boolean justClosed = position.status() == PositionStatus.CLOSED
                 && (previous == null || previous.status() != PositionStatus.CLOSED);
         if (justClosed) {
