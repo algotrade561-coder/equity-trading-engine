@@ -563,4 +563,53 @@ class MomentumStrategyTest {
                 .as("a wide spread or a margin shortfall clears; the setup must come back")
                 .isTrue();
     }
+
+    /**
+     * A full position book is not a judgement about this trade.
+     *
+     * <p>Capacity refusals were held off for two minutes like any other, so a valid setup simply
+     * re-fired at the cap for as long as the book stayed full. PARADEEP triggered eight times in one
+     * session and became a position none of them. The hold is now lifted by a position closing, not
+     * by the clock.</p>
+     */
+    @Test
+    void aSetupDeferredForCapacityWaitsForASlotRatherThanTheClock() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        strategy.onTick(account, state, tickAt(trigger + 0.5));
+        strategy.onEntryDeferredForCapacity(account.userId(), SYMBOL);
+
+        clock.advance(java.time.Duration.ofMinutes(30));
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("half an hour later the book may still be full; time is not the signal")
+                .isFalse();
+
+        strategy.onCapacityFreed(account.userId());
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("a slot freed, and the setup was valid the whole time")
+                .isTrue();
+    }
+
+    /**
+     * Freeing a slot must not resurrect a setup that was held off for a different reason — a broker
+     * refusal or a spent attempt budget is unaffected by a position closing.
+     */
+    @Test
+    void freeingASlotDoesNotLiftAHoldOffTakenForAnotherReason() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+        SharedInstrumentState state = healthy(trigger + 0.5, trigger + 2, 0.5, 1.5);
+
+        strategy.onTick(account, state, tickAt(trigger + 0.5));
+        strategy.onEntryAbandoned(account.userId(), SYMBOL, true);   // spent for the session
+
+        strategy.onCapacityFreed(account.userId());
+
+        assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
+                .as("the attempt budget cannot refill because a position closed")
+                .isFalse();
+    }
 }

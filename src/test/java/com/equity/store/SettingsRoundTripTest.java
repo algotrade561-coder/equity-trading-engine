@@ -97,8 +97,37 @@ class SettingsRoundTripTest {
         assertThat(fresh.limits().riskPerTradeRupees())
                 .isEqualTo(RiskLimits.conservative().riskPerTradeRupees());
         assertThat(fresh.exitPolicy())
-                .as("everything after entry ships off; nothing here has been measured on tape")
-                .isEqualTo(ExitPolicy.fixed());
+                .as("breakeven at 1R ships on; everything else after entry stays off")
+                .isEqualTo(ExitPolicy.breakevenAtOneR());
+    }
+
+    /**
+     * The shipped exit policy, and the reasoning behind each half of it.
+     *
+     * <p>It shipped with everything off because nothing had been measured. The first session that
+     * traded measured it: ten closed positions gave back Rs 9,616 between their peak and their exit,
+     * and two reached a full R of profit before finishing negative — BEML ran to +1.30R and closed
+     * at -1.35R. Moving the stop to entry at 1R turns those into scratches.</p>
+     *
+     * <p>Trailing and structure exit stay off, and that is the more important half. Both can clip a
+     * winner, and the same session had three trades run past 2R that needed the room. Breakeven is
+     * defensible on one session precisely because it is asymmetric: it cannot cost a winner anything
+     * it had not already given back, and it cannot act until the trade has paid for its own risk.</p>
+     */
+    @Test
+    void theShippedPolicyMovesTheStopToEntryButNeverChasesPrice() {
+        ExitPolicy shipped = ExitPolicy.breakevenAtOneR();
+
+        assertThat(shipped.breakevenEnabled()).isTrue();
+        assertThat(shipped.breakevenArmAtR())
+                .as("armed only once the trade is ahead by its own risk")
+                .isEqualTo(1.0);
+        assertThat(shipped.trailingEnabled())
+                .as("trailing would have clipped three trades that needed room to reach 2R")
+                .isFalse();
+        assertThat(shipped.structureExitEnabled())
+                .as("unmeasured, and it can close a winner early")
+                .isFalse();
     }
 
     @Test

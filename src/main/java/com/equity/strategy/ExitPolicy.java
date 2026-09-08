@@ -8,10 +8,22 @@ package com.equity.strategy;
  * worth A/B testing between users on the same signal. Two users can run identical entry thresholds
  * and different exit policies, and the difference in outcome is then attributable.</p>
  *
- * <h2>Everything is off by default</h2>
- * <p>{@link #fixed()} is the shipped policy: the stop and target set at entry never move. That is
- * not a recommendation, it is an admission — none of the options below have been measured on this
- * market's tape, and a trailing stop that has not been measured is a preference, not an edge.</p>
+ * <h2>What ships, and why it changed</h2>
+ * <p>{@link #fixed()} shipped first: the stop and target set at entry never move. That was an
+ * admission rather than a recommendation — nothing here had been measured on this market's tape.</p>
+ *
+ * <p>The first session that traded measured it. Ten closed positions gave back <b>Rs 9,616</b>
+ * between their peak and their exit. Two of them reached a full R of profit and then finished
+ * negative: BEML ran to +1.30R and closed at -1.35R, a 2.66R round trip. Moving the stop to entry
+ * once a trade is 1R ahead would have turned those two into scratches and lifted the day's realised
+ * result from Rs 331 to Rs 1,384 — while costing the winners nothing, because all three of them ran
+ * past 2R without ever returning to entry.</p>
+ *
+ * <p>So {@link #breakevenAtOneR()} is now the default. It is one session of evidence, which is thin,
+ * and the asymmetry is what makes it defensible rather than the sample size: the rule can only ever
+ * convert a loss into a scratch, and it cannot act at all until the trade has already paid for its
+ * own risk. Trailing and structure exit stay off — those can clip a winner, and nothing has
+ * measured them.</p>
  *
  * <p>In a sibling options engine the exit was the part that gave back what the entries earned, and
  * the fixes that looked obvious mostly failed: cutting losers early clipped winners, holding through
@@ -33,9 +45,19 @@ public record ExitPolicy(
         double trailingAtrMultiple,
         boolean structureExitEnabled) {
 
-    /** What ships: stop and target fixed at entry, nothing moves. */
+    /** Stop and target fixed at entry, nothing moves. The other arm of the comparison. */
     public static ExitPolicy fixed() {
         return new ExitPolicy(false, 1.0, false, 1.0, 1.5, false);
+    }
+
+    /**
+     * What ships: the stop moves to entry once the trade is 1R ahead, and nothing else moves.
+     *
+     * <p>Deliberately the smallest intervention that addresses what was measured. Trailing would
+     * have clipped ZENTEC, TEGA and BANDHANBNK, each of which needed room to reach 2R.</p>
+     */
+    public static ExitPolicy breakevenAtOneR() {
+        return new ExitPolicy(true, 1.0, false, 1.0, 1.5, false);
     }
 
     /** A starting point for the other arm of an A/B. Not calibrated — nothing here has been measured. */

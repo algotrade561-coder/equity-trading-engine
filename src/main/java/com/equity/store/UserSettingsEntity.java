@@ -88,7 +88,7 @@ public class UserSettingsEntity {
         e.tradingUserId = tradingUserId;
         e.apply(RiskLimits.conservative());
         e.apply(StrategyThresholds.defaults());
-        e.apply(ExitPolicy.fixed());
+        e.apply(ExitPolicy.breakevenAtOneR());
         return e;
     }
 

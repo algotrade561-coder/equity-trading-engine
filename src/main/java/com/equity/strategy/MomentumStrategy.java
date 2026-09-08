@@ -44,6 +44,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class MomentumStrategy {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(MomentumStrategy.class);
+
     /** An armed setup that has not triggered within this many bars has gone stale. */
     private static final int MAX_BARS_ARMED = 10;
     /** After an invalidation, wait before rebuilding a setup on the same symbol. */
@@ -415,6 +418,34 @@ public class MomentumStrategy {
         java.time.Instant now = clock.now();
         Duration holdOff = forTheSession ? REST_OF_SESSION : ENTRY_RETRY_HOLD_OFF;
         setupFor(userId, symbol).holdOffUntil(now.plus(holdOff), now);
+    }
+
+    /**
+     * Holds a setup off until a position slot frees, rather than for a fixed time.
+     *
+     * <p>A full book is not a judgement about this trade, so retrying it every two minutes only
+     * produces noise: one symbol triggered eight times in a session and became a position none of
+     * them, because every slot was occupied the whole time. The hold is lifted by
+     * {@link #onCapacityFreed}, not by the clock.</p>
+     */
+    public void onEntryDeferredForCapacity(UserId userId, String symbol) {
+        java.time.Instant now = clock.now();
+        setupFor(userId, symbol).holdOffUntil(now.plus(REST_OF_SESSION), now, true);
+    }
+
+    /**
+     * A position closed, so anything waiting only on capacity may trigger again.
+     *
+     * <p>Released immediately rather than after a delay: the setup was valid when it was deferred
+     * and the only thing that had changed is now undone.</p>
+     */
+    public void onCapacityFreed(UserId userId) {
+        String prefix = userId + "|";
+        setups.forEach((key, setup) -> {
+            if (key.startsWith(prefix) && setup.releaseCapacityHold()) {
+                log.debug("released the capacity hold on {}", key.substring(prefix.length()));
+            }
+        });
     }
 
     private void invalidate(SetupState setup, java.time.Instant now) {

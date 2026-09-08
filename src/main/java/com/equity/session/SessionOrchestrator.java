@@ -160,6 +160,8 @@ public class SessionOrchestrator {
 
         positions.onClosed(position -> {
             ledger.recordClosed(position);
+            // A slot just freed; anything deferred only for want of one may trigger again.
+            strategy.onCapacityFreed(position.userId());
             // Do not re-enter a symbol immediately after being taken out of it: the conditions that
             // produced the exit are usually still present a minute later.
             strategy.onPositionClosed(position.userId(), position.symbol(),
@@ -248,8 +250,13 @@ public class SessionOrchestrator {
             journal.riskDenial(account.userId(), state,
                     strategy.setupFor(account.userId(), state.symbol()),
                     decision.denialReason().name(), decision.note());
-            strategy.onEntryAbandoned(account.userId(), state.symbol(),
-                    decision.denialReason().isTerminalForSession());
+            if (decision.denialReason().isCapacityLimited()) {
+                // Waiting on a slot, not on time. Released the moment a position closes.
+                strategy.onEntryDeferredForCapacity(account.userId(), state.symbol());
+            } else {
+                strategy.onEntryAbandoned(account.userId(), state.symbol(),
+                        decision.denialReason().isTerminalForSession());
+            }
             return;
         }
 

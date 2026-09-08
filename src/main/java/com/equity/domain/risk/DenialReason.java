@@ -69,4 +69,16 @@ public enum DenialReason {
     public boolean isTerminalForSession() {
         return this == MAX_DAILY_ATTEMPTS || this == DAILY_LOSS_LATCHED;
     }
+
+    /**
+     * True when the refusal is a full book rather than a judgement about this trade.
+     *
+     * <p>Distinct from {@link #isTerminalForSession()}: capacity comes back the moment a position
+     * closes, so holding off for the day would be wrong, and retrying every two minutes is waste.
+     * PARADEEP triggered eight times in one session and became a position none of them, because
+     * every slot was occupied and the setup simply kept re-firing at the cap.</p>
+     */
+    public boolean isCapacityLimited() {
+        return this == MAX_OPEN_POSITIONS || this == PENDING_ORDER_CAP;
+    }
 }

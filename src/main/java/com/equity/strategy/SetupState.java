@@ -47,6 +47,8 @@ public class SetupState {
      * price-derived conditions, because the rest cannot change between closes. Which is true, and
      * exactly why it was wrong to ignore them: the last close had already said no.</p>
      */
+    /** True when the current hold-off is waiting on a free position slot rather than on time. */
+    private boolean heldForCapacity;
     private boolean mandatoryOk = true;
     private String mandatoryFailure = "";
 
@@ -84,8 +86,27 @@ public class SetupState {
      * condition that needs time to change, and retrying it hundreds of times a second cannot help.</p>
      */
     public void holdOffUntil(Instant until, Instant at) {
+        holdOffUntil(until, at, false);
+    }
+
+    public void holdOffUntil(Instant until, Instant at, boolean forCapacity) {
         this.retriggerAfter = until;
+        this.heldForCapacity = forCapacity;
         moveTo(MomentumState.ARMED, at);
+    }
+
+    /**
+     * Lifts a hold-off that was only waiting for a position slot.
+     *
+     * <p>Leaves every other hold-off alone. A setup held off because the broker refused it, or
+     * because the attempt budget is spent, is waiting on something a closing position does not
+     * change.</p>
+     */
+    public boolean releaseCapacityHold() {
+        if (!heldForCapacity) return false;
+        heldForCapacity = false;
+        retriggerAfter = null;
+        return true;
     }
 
     /** True while a re-trigger is suppressed after an abandoned entry. */
