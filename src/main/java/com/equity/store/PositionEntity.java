@@ -72,6 +72,10 @@ public class PositionEntity {
     private double targetPrice;
     private double highWaterMark;
 
+    /** Worst price seen while the position was open — the evidence for stop width. */
+    @Column(name = "low_water_mark")
+    private double lowWaterMark;
+
     private Instant openedAt;
     private Instant closedAt;
     private double exitPrice;
@@ -113,6 +117,7 @@ public class PositionEntity {
         this.stopPrice = p.stopPrice();
         this.targetPrice = p.targetPrice();
         this.highWaterMark = p.highWaterMark();
+        this.lowWaterMark = p.lowWaterMark();
         this.openedAt = p.openedAt();
         this.closedAt = p.closedAt();
         this.exitPrice = p.exitPrice();
@@ -133,7 +138,7 @@ public class PositionEntity {
                 ProductType.valueOf(product),
                 PositionStatus.valueOf(status),
                 quantity, filledQuantity, intendedEntryPrice, entryPrice,
-                stopPrice, targetPrice, highWaterMark,
+                stopPrice, targetPrice, highWaterMark, lowWaterMark,
                 openedAt, closedAt, exitPrice,
                 exitReason == null ? null : ExitReason.valueOf(exitReason),
                 entryTag == null ? null : new OrderTag(entryTag), entryOrderId,

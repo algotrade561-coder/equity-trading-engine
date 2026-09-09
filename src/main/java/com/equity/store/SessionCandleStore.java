@@ -73,7 +73,7 @@ public class SessionCandleStore {
     public SessionCandleStore(CandleRepository repository, CandleEngine candles,
                               StructureEngine structure, TradingClock clock,
                               @Value("${equity.candles.persist:true}") boolean enabled,
-                              @Value("${equity.candles.retention-days:5}") int retentionDays) {
+                              @Value("${equity.candles.retention-days:90}") int retentionDays) {
         this.repository = repository;
         this.candles = candles;
         this.structure = structure;
@@ -228,7 +228,16 @@ public class SessionCandleStore {
         repository.save(row);
     }
 
-    /** Old sessions cannot help a restart and would grow the file without bound. */
+    /**
+     * Old sessions are pruned, but far later than a restart needs them.
+     *
+     * <p>Five days was the original window, chosen for what a restart requires — which is a day.
+     * That is the wrong criterion: every question worth asking of this engine a month from now needs
+     * the price path. Whether a stop was too tight, whether a target left money behind, what a
+     * different exit policy would have returned — all of them replay the bars, and none of them can
+     * be answered from a position row. At roughly 25MB a session, ninety days costs about two
+     * gigabytes and buys the only evidence there is.</p>
+     */
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void prune() {

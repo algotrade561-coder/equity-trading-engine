@@ -47,7 +47,7 @@ class MomentumStrategyTest {
         strategy = new MomentumStrategy(clock);
         account = new UserAccount(
                 new TradingUser(UserId.random(), "test", "", UserStatus.ACTIVE, Set.of(Role.TRADER)),
-                RiskLimits.conservative(), StrategyThresholds.defaults());
+                RiskLimits.conservative(), fixtureThresholds());
         account.setEntriesEnabled(true);
     }
 
@@ -400,6 +400,25 @@ class MomentumStrategyTest {
                 .isEqualTo(MomentumState.IDLE);
     }
 
+    /**
+     * The shipped thresholds with a wide day-change ceiling.
+     *
+     * <p>These fixtures price a stock at 1035 against a 1000 previous close, which is 3.5% and sits
+     * exactly on the shipped limit. Pinning a fixture to a tuning parameter means every future
+     * change to that parameter breaks twenty unrelated tests for a reason none of them are about —
+     * the boundary itself is covered by its own test below.</p>
+     */
+    private static StrategyThresholds fixtureThresholds() {
+        StrategyThresholds d = StrategyThresholds.defaults();
+        return new StrategyThresholds(d.minDayChangePercent(), 12.0, d.sanityBandPercent(),
+                d.maxDistanceFromHighPct(), d.minImpulseReturn5m(), d.minRelativeVolume(),
+                d.requireAboveVwap(), d.requireEmaStack(), d.requireOutperformIndex(),
+                d.minPullbackPercent(), d.maxPullbackPercent(), d.maxConsolidationRangePct(),
+                d.minConsolidationBars(), d.triggerBufferPercent(), d.stopAtrMultiple(),
+                d.targetRMultiple(), d.timeStopMinutes(), d.entryWindowStart(),
+                d.entryWindowEnd(), d.squareOffTime());
+    }
+
     private SetupState arm() {
         List<Candle> history = flatHistory(30, 1030);
         strategy.onCandleClosed(account, healthy(1035, 1036, 0.9, 1.8), history);
@@ -611,5 +630,41 @@ class MomentumStrategyTest {
         assertThat(strategy.onTick(account, state, tickAt(trigger + 0.5)).isIntent())
                 .as("the attempt budget cannot refill because a position closed")
                 .isFalse();
+    }
+
+    /**
+     * The shipped day-change ceiling, and why it moved.
+     *
+     * <p>It was 12%, which across two live sessions refused nothing at all. The first session that
+     * traded showed winners entering on stocks up 2.61% on average and losers on stocks up 4.22%;
+     * 3.5% would have excluded four of six losers and kept all three winners.</p>
+     */
+    @Test
+    void theShippedDayChangeCeilingActuallyFilters() {
+        assertThat(StrategyThresholds.defaults().maxDayChangePercent())
+                .as("12% never refused a single decision across two sessions")
+                .isEqualTo(3.5);
+    }
+
+    /**
+     * Volume decays between the impulse and the breakout, and only the breakout matters.
+     *
+     * <p>It was tested when the impulse formed and never again, so a setup could arm on strength it
+     * no longer had by the time it triggered — one winner broke out at 0.86 against a 1.3 threshold
+     * it had passed ten minutes earlier. Measured at the trigger, volume separated outcomes sharply:
+     * winners averaged 2.83, losers 1.03.</p>
+     */
+    @Test
+    void aBreakoutOnVolumeThatHasFadedIsRefused() {
+        SetupState setup = arm();
+        double trigger = setup.triggerLevel();
+
+        SharedInstrumentState faded = healthy(trigger + 0.5, trigger + 2, 0.9, 0.4);
+        StrategySignal signal = strategy.onTick(account, faded, tickAt(trigger + 0.5));
+
+        assertThat(signal.isIntent())
+                .as("the impulse had volume; the breakout does not")
+                .isFalse();
+        assertThat(signal.condition()).isEqualTo("volumeFadedByTrigger");
     }
 }

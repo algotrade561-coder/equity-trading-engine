@@ -58,10 +58,25 @@ public record StrategyThresholds(
         LocalTime entryWindowEnd,
         LocalTime squareOffTime) {
 
+    /**
+     * A note on the day-change ceiling.
+     *
+     * <p>It shipped at 12%, which is not a filter — across two live sessions it refused nothing at
+     * all. The first session that traded showed why it should: winners entered on stocks up an
+     * average of 2.61% on the day, losers on stocks up 4.22%. Every loser but two was already up
+     * more than 4% — DATAPATTNS at 6.47%, BEML at 4.42%, PINELABS at 4.38% — while the three winners
+     * came in at 2.32%, 2.36% and 3.15%.</p>
+     *
+     * <p>3.5% would have excluded four of six losers and kept all three winners. That is nine trades
+     * and one session, so it is a hypothesis rather than a calibration; it is acted on because the
+     * mechanism is plain — a stock already up five per cent has less room before it exhausts, and
+     * continuation pays best earlier in a move — and because the alternative is a limit that has
+     * demonstrably never done anything.</p>
+     */
     public static StrategyThresholds defaults() {
         return new StrategyThresholds(
                 1.5,    // min day change %
-                12.0,   // max day change %
+                3.5,    // max day change % — see the note on calibration below
                 25.0,   // corporate-action sanity band %
                 1.5,    // max distance from day high %
                 0.6,    // min 5m impulse return %

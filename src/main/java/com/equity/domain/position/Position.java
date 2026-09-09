@@ -37,6 +37,7 @@ public record Position(
         double stopPrice,
         double targetPrice,
         double highWaterMark,
+        double lowWaterMark,
         Instant openedAt,
         Instant closedAt,
         double exitPrice,
@@ -53,14 +54,16 @@ public record Position(
                                         String entryOrderId, Instant at) {
         return new Position(UUID.randomUUID(), userId, symbol, direction, pattern, product,
                 PositionStatus.PENDING_ENTRY, quantity, 0, intendedEntryPrice, 0,
-                stopPrice, targetPrice, 0, at, null, 0, null, entryTag, entryOrderId, null, null);
+                stopPrice, targetPrice, 0, 0, at, null, 0, null,
+                entryTag, entryOrderId, null, null);
     }
 
     public Position withFill(int filled, double averagePrice, Instant at) {
         if (filled <= 0) return this;
         return new Position(id, userId, symbol, direction, pattern, product, PositionStatus.OPEN,
                 quantity, filled, intendedEntryPrice, averagePrice, stopPrice, targetPrice,
-                averagePrice, at, closedAt, exitPrice, exitReason,
+                // Both marks start at the fill: the trade has neither run nor retraced yet.
+                averagePrice, averagePrice, at, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
@@ -68,13 +71,13 @@ public record Position(
         return new Position(id, userId, symbol, direction, pattern, product,
                 PositionStatus.EXIT_PENDING,
                 quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
-                highWaterMark, openedAt, closedAt, exitPrice, reason, entryTag, entryOrderId, tag, orderId);
+                highWaterMark, lowWaterMark, openedAt, closedAt, exitPrice, reason, entryTag, entryOrderId, tag, orderId);
     }
 
     public Position withClose(double price, ExitReason reason, Instant at) {
         return new Position(id, userId, symbol, direction, pattern, product, PositionStatus.CLOSED,
                 quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
-                highWaterMark, openedAt, at, price, reason, entryTag, entryOrderId, exitTag, exitOrderId);
+                highWaterMark, lowWaterMark, openedAt, at, price, reason, entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
     public Position withStatus(PositionStatus newStatus) {
@@ -93,7 +96,7 @@ public record Position(
         Instant finishedAt = newStatus.isFinished() && closedAt == null ? at : closedAt;
         return new Position(id, userId, symbol, direction, pattern, product, newStatus,
                 quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
-                highWaterMark, openedAt, finishedAt, exitPrice, exitReason,
+                highWaterMark, lowWaterMark, openedAt, finishedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
@@ -103,7 +106,7 @@ public record Position(
         if (loosening) return this;
         return new Position(id, userId, symbol, direction, pattern, product, status,
                 quantity, filledQuantity, intendedEntryPrice, entryPrice, newStop, targetPrice,
-                highWaterMark, openedAt, closedAt, exitPrice, exitReason,
+                highWaterMark, lowWaterMark, openedAt, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
@@ -114,6 +117,41 @@ public record Position(
      * in the trailing logic: the mark is a fact about the trade, and a policy that can be switched
      * on mid-position must not start trailing from wherever the price happens to be at that moment.
      */
+    /**
+     * Records a new worst price. Only ever moves against the position.
+     *
+     * <p>The mirror of the high-water mark, and the half that was missing. That one says how much a
+     * trade gave back; this one says how much heat it took before it worked — which is the only way
+     * to answer whether a stop is too tight. A winner that first ran 0.9R against its stop and a
+     * winner that never traded below entry are the same row without it.</p>
+     */
+    public Position withLowWaterMark(double price) {
+        if (!hasExposure() || price <= 0) return this;
+        boolean worse = direction == Direction.LONG
+                ? lowWaterMark == 0 || price < lowWaterMark
+                : price > lowWaterMark;
+        if (!worse) return this;
+        return new Position(id, userId, symbol, direction, pattern, product, status,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                highWaterMark, price, openedAt, closedAt, exitPrice, exitReason,
+                entryTag, entryOrderId, exitTag, exitOrderId);
+    }
+
+    /**
+     * How far the trade went against itself, in units of the original risk.
+     *
+     * <p>Positive. A value near 1 means the stop was nearly touched before the trade worked; a value
+     * near 0 means it never traded against the entry at all.</p>
+     */
+    public double adverseExcursionR() {
+        double risk = riskPerShare();
+        if (!(risk > 0) || lowWaterMark <= 0) return 0;
+        double move = direction == Direction.LONG
+                ? entryPrice - lowWaterMark
+                : lowWaterMark - entryPrice;
+        return Math.max(0, move / risk);
+    }
+
     public Position withHighWaterMark(double price) {
         if (!hasExposure() || price <= 0) return this;
         boolean better = direction == Direction.LONG
@@ -122,7 +160,7 @@ public record Position(
         if (!better) return this;
         return new Position(id, userId, symbol, direction, pattern, product, status,
                 quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
-                price, openedAt, closedAt, exitPrice, exitReason,
+                price, lowWaterMark, openedAt, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
@@ -153,6 +191,27 @@ public record Position(
         if (!hasExposure() || filledQuantity == 0) return 0;
         double move = lastPrice - entryPrice;
         return (direction == Direction.LONG ? move : -move) * filledQuantity;
+    }
+
+    /**
+     * What the round trip cost in charges. Derived from the fill prices rather than stored, so it
+     * cannot drift away from the trade it describes.
+     */
+    public TradeCost cost() {
+        if (status != PositionStatus.CLOSED || filledQuantity == 0) {
+            return new TradeCost(0, 0, 0, 0, 0, 0);
+        }
+        return TradeCost.forRoundTrip(entryPrice * filledQuantity, exitPrice * filledQuantity);
+    }
+
+    /**
+     * Profit after charges. The figure that compounds.
+     *
+     * <p>Gross R decides whether the strategy has an edge; this decides whether it is kept. On a
+     * tight stop the two differ materially — costs follow notional, risk follows stop distance.</p>
+     */
+    public double netPnl() {
+        return realisedPnl() - cost().total();
     }
 
     public double realisedPnl() {

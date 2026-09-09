@@ -382,6 +382,15 @@ public class MomentumStrategy {
             return StrategySignal.reject(RejectionStage.TRIGGER, "belowVwapAtTrigger",
                     String.format("%.2f vs vwap %.2f", s.lastPrice(), s.vwap()));
         }
+        // Volume is tested when the impulse forms, which can be ten minutes before the breakout, and
+        // it decays. Measured at the trigger it separates outcomes sharply — winners averaged 2.83
+        // against 1.03 for losers over the first session that traded — and one winner triggered at
+        // 0.86, below a threshold it had passed earlier on strength it no longer had.
+        if (!(s.relativeVolume() >= t.minRelativeVolume())) {
+            return StrategySignal.reject(RejectionStage.TRIGGER, "volumeFadedByTrigger",
+                    String.format("rvol %.2f < %.2f by the time it broke out",
+                            s.relativeVolume(), t.minRelativeVolume()));
+        }
         return StrategySignal.NOTHING;
     }
 

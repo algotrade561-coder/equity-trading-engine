@@ -224,7 +224,11 @@ public class PositionLifecycle {
             // Mark first, then move the stop, then test it — in that order. Testing a stop before
             // this tick's price has been folded into the high-water mark would judge the trade
             // against a level that is one tick out of date.
-            Position marked = position.withHighWaterMark(tick.lastPrice());
+            // Both marks, so the journal can say how much heat a trade took as well as
+            // how much it gave back. Without the adverse side there is no evidence for
+            // whether a stop is too tight.
+            Position marked = position.withHighWaterMark(tick.lastPrice())
+                    .withLowWaterMark(tick.lastPrice());
             Position adjusted = StopAdjuster.adjust(marked, exitPolicySource.apply(position.userId()),
                     atrSource.applyAsDouble(position.symbol()));
             if (adjusted != position) {
@@ -510,9 +514,13 @@ public class PositionLifecycle {
             Position closed = position.withClose(order.averagePrice(),
                     position.exitReason(), clock.now());
             book.put(closed);
-            log.info("CLOSED {} {} at {} reason {} pnl {}", closed.userId(), closed.symbol(),
-                    closed.exitPrice(), closed.exitReason(),
-                    String.format("%.2f", closed.realisedPnl()));
+            log.info("CLOSED {} {} at {} reason {} pnl {} net {} (charges {}) MFE {}R MAE {}R",
+                    closed.userId(), closed.symbol(), closed.exitPrice(), closed.exitReason(),
+                    String.format("%.2f", closed.realisedPnl()),
+                    String.format("%.2f", closed.netPnl()),
+                    String.format("%.2f", closed.cost().total()),
+                    String.format("%.2f", closed.favourableExcursionR()),
+                    String.format("%.2f", closed.adverseExcursionR()));
         } else if (order.status() == OrderStatus.REJECTED || order.status() == OrderStatus.CANCELLED) {
             // Put it back to OPEN so the next tick can raise the exit again. An exit that failed
             // must not leave the position permanently marked as exiting and therefore ignored.

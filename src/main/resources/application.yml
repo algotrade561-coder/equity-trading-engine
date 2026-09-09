@@ -99,6 +99,18 @@ equity:
     # runs but declines to store them, rather than storing them in clear text.
     secret-key: ${EQUITY_SECRET_KEY:}
 
+  # ── What is kept for later analysis ─────────────────────────────────────────
+  # Every question worth asking of this engine a month from now replays the price path: whether a
+  # stop was too tight, whether a target left money behind, what a different exit policy would have
+  # returned. None of it can be answered from a position row. Five days was sized for what a restart
+  # needs, which is a day, and would have deleted the evidence before the question was asked.
+  candles:
+    persist: true
+    retention-days: 90        # ~25MB a session, so roughly 2GB
+  journal:
+    enabled: true
+    directory: ./data/journal
+
   broker:
     kite:
       # Own Kite Connect app, separate from the options engine: an app holds exactly one registered

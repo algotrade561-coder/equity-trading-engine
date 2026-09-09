@@ -30,6 +30,25 @@ public class MarketDataRouter {
 
     private static final Logger log = LoggerFactory.getLogger(MarketDataRouter.class);
 
+    /**
+     * The regular session. Candles are built only between these, and the reason is not tidiness.
+     *
+     * <p>The feed delivers ticks well outside market hours — the pre-open auction, and stale
+     * last-traded prices for hours after the close. Those were being folded into the same 1-minute
+     * series the indicators read, and one session produced 29,685 pre-open bars against 187,405
+     * session bars. Relative volume is computed against the session average, so tens of thousands of
+     * near-empty bars in the denominator inflated it for every stock: {@code minRelativeVolume}
+     * refused 17 decisions out of 14,980, a filter doing no filtering. VWAP, the EMA pair and ATR
+     * were all skewed by the same bars.</p>
+     *
+     * <p>Bounded on the tick's own exchange timestamp rather than the clock, so a replay of a taped
+     * session draws the same boundary the live session did.</p>
+     */
+    private static final java.time.LocalTime SESSION_OPEN = java.time.LocalTime.of(9, 15);
+    private static final java.time.LocalTime SESSION_CLOSE = java.time.LocalTime.of(15, 30);
+
+    private final AtomicLong ticksOutsideSession = new AtomicLong();
+
     private final InstrumentFreshness freshness;
     private final CandleEngine candles;
     private final StructureEngine structure;
@@ -60,8 +79,15 @@ public class MarketDataRouter {
             try {
                 freshness.record(tick);
                 lastTick.put(tick.symbol(), tick);
-                candles.onTick(tick);
+                // Structure still updates: the day's high, low and previous close come from the
+                // exchange's own fields on the tick and are correct whenever they arrive. Only the
+                // bar series is bounded, because only it is cumulative.
                 structure.onTick(tick);
+                if (withinSession(tick)) {
+                    candles.onTick(tick);
+                } else {
+                    ticksOutsideSession.incrementAndGet();
+                }
             } catch (RuntimeException e) {
                 ticksDropped.incrementAndGet();
                 log.error("failed to process tick for {}", tick.symbol(), e);
@@ -91,6 +117,21 @@ public class MarketDataRouter {
 
     /** The last tick for a symbol, or null. Depth lives here and nowhere else downstream. */
     public Tick lastTick(String symbol) { return lastTick.get(symbol); }
+
+    /**
+     * Whether this tick belongs to the regular session.
+     *
+     * <p>Uses the exchange timestamp, not the local clock: a tick that arrives late still belongs to
+     * the minute it was traded in, and a replay must draw the boundary where the live session did.</p>
+     */
+    private static boolean withinSession(Tick tick) {
+        java.time.LocalTime at = tick.exchangeTime()
+                .atZone(com.equity.platform.time.TradingClock.IST).toLocalTime();
+        return !at.isBefore(SESSION_OPEN) && !at.isAfter(SESSION_CLOSE);
+    }
+
+    /** Ticks that arrived outside market hours and were not folded into any bar. */
+    public long ticksOutsideSession() { return ticksOutsideSession.get(); }
 
     public long ticksSeen()    { return ticksSeen.get(); }
     public long ticksDropped() { return ticksDropped.get(); }

@@ -29,16 +29,21 @@ public class UserProfileService {
 
     private static final Logger log = LoggerFactory.getLogger(UserProfileService.class);
 
+    private final ConfigChangeRepository configChanges;
+    private final com.equity.platform.time.TradingClock clock;
     private final AppUserRepository users;
     private final BrokerConfigRepository brokerConfigs;
     private final UserSettingsRepository settings;
     private final SecretCipher cipher;
 
     public UserProfileService(AppUserRepository users, BrokerConfigRepository brokerConfigs,
-                              UserSettingsRepository settings, SecretCipher cipher) {
+                              UserSettingsRepository settings, ConfigChangeRepository configChanges,
+                              com.equity.platform.time.TradingClock clock, SecretCipher cipher) {
         this.users = users;
         this.brokerConfigs = brokerConfigs;
         this.settings = settings;
+        this.configChanges = configChanges;
+        this.clock = clock;
         this.cipher = cipher;
     }
 
@@ -139,7 +144,8 @@ public class UserProfileService {
         UserSettingsEntity e = settingsFor(userId);
         e.apply(limits);
         settings.save(e);
-        log.warn("risk limits updated for user={}", userId);
+        recordChange(userId, "RISK_LIMITS", limits.toString());
+        log.warn("risk limits updated for user={}: {}", userId, limits);
     }
 
     @Transactional
@@ -147,6 +153,8 @@ public class UserProfileService {
         UserSettingsEntity e = settingsFor(userId);
         e.apply(thresholds);
         settings.save(e);
+        recordChange(userId, "THRESHOLDS", thresholds.toString());
+        log.warn("strategy thresholds updated for user={}", userId);
     }
 
     @Transactional
@@ -154,6 +162,28 @@ public class UserProfileService {
         UserSettingsEntity e = settingsFor(userId);
         e.apply(policy);
         settings.save(e);
+        recordChange(userId, "EXIT_POLICY", policy.toString());
+        log.warn("exit policy updated for user={}: {}", userId, policy);
+    }
+
+    /**
+     * Writes the configuration into the audit trail.
+     *
+     * <p>user_settings is overwritten in place, so it can say what the configuration is and never
+     * what it was. Without this a month of results is a month of trades taken under unknown and
+     * varying rules — and the rules did vary: in three sessions the risk budget tripled, the daily
+     * loss limit more than tripled, and breakeven went from off to on.</p>
+     *
+     * <p>Never allowed to fail a settings save. Losing an audit row costs a later comparison;
+     * refusing the change would cost the operator control of a live engine.</p>
+     */
+    private void recordChange(UserId userId, String kind, String settings) {
+        try {
+            configChanges.save(new ConfigChangeEntity(userId.toString(), clock.now(),
+                    clock.tradingDate(), kind, settings));
+        } catch (RuntimeException e) {
+            log.warn("could not record the {} change for audit: {}", kind, e.getMessage());
+        }
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
