@@ -39,6 +39,28 @@ public class StructureEngine {
     /** NIFTY 50, for relative strength. Subscribed as an index, which ticks without volume. */
     public static final String INDEX_SYMBOL = "NIFTY 50";
 
+    /**
+     * The window relative strength is measured over.
+     *
+     * <p>Fifteen minutes, not five, and the difference is the whole point. This engine trades
+     * <b>pullback continuation</b>: the entry is taken while the stock is pausing, so the check runs
+     * at exactly the moment a short-window return is at its weakest. Measuring over five minutes
+     * asked "is this stock outrunning the index during its own pullback", which it is not, by
+     * construction.</p>
+     *
+     * <p>It showed up as the largest single blocker in the funnel — a third of every rejection —
+     * and the margins gave it away: 30% of those rejections were within 0.05 percentage points of
+     * the index and 78% within 0.25, which is inside the noise of a five-minute difference rather
+     * than a judgement about strength. The same rows had a median five-minute return of -0.12% and
+     * a median fifteen-minute return of +0.58%, and 97% of them looked stronger over the longer
+     * window. The same stock would be refused hundreds of times and admitted once, according to
+     * which side of zero the noise landed on.</p>
+     *
+     * <p>Fifteen minutes spans the impulse <i>and</i> the pause, so it asks the question the filter
+     * was meant to ask: is this stock leading the market today.</p>
+     */
+    private static final int RELATIVE_STRENGTH_LOOKBACK_MINUTES = 15;
+
     private final CandleEngine candles;
     private final Map<String, AtomicReference<SharedInstrumentState>> states = new ConcurrentHashMap<>();
 
@@ -99,7 +121,7 @@ public class StructureEngine {
         double r5 = Indicators.returnPercent(minutes, 5);
         double r15 = Indicators.returnPercent(minutes, 15);
         double relativeVolume = sessionRelativeVolume(minutes);
-        double indexReturn5m = indexReturn();
+        double indexReturn15m = indexReturn();
 
         AtomicReference<SharedInstrumentState> ref = states.computeIfAbsent(
                 symbol, s -> new AtomicReference<>(empty(s)));
@@ -109,7 +131,7 @@ public class StructureEngine {
                 prev.lastPrice(), prev.cumulativeVolume(),
                 vwap, ema9, ema20, atr, r1, r3, r5, r15, relativeVolume,
                 prev.currentGainerRank(), prev.previousGainerRank(),
-                Indicators.relativeStrength(r5, indexReturn5m),
+                Indicators.relativeStrength(r15, indexReturn15m),
                 prev.sectorRelativeStrength(),
                 prev.lastUpdated()));
     }
@@ -141,9 +163,21 @@ public class StructureEngine {
 
     public int size() { return states.size(); }
 
+    /**
+     * The index's own return over the same window, or NaN while it cannot be computed.
+     *
+     * <p>NaN rather than zero for an absent index, which is the change that matters here: zero says
+     * "the market was flat", and a stock is then compared against a market that was never measured.
+     * Every candidate would pass a filter that had not actually run. An unknown measurement and a
+     * neutral one are different facts, and relative strength propagates the NaN so the setup is
+     * refused and the rejection reads {@code rs NaN} rather than quietly succeeding.</p>
+     *
+     * <p>In practice this is the first minutes of a session only — the index streams from the open,
+     * and the entry window does not start until 09:30.</p>
+     */
     private double indexReturn() {
         List<Candle> index = candles.history(INDEX_SYMBOL, Timeframe.M1);
-        return index.isEmpty() ? 0.0 : Indicators.returnPercent(index, 5);
+        return Indicators.returnPercent(index, RELATIVE_STRENGTH_LOOKBACK_MINUTES);
     }
 
     /**

@@ -67,6 +67,17 @@ public record SharedInstrumentState(
 
     public boolean rankImproving() { return rankChange() < 0; }
 
+    /**
+     * Whether the stock beat the index over the relative-strength window.
+     *
+     * <p>False when the strength is NaN, which is what an unmeasured index must produce. That is
+     * deliberate: this gates entries, and a filter that cannot be evaluated has to refuse rather
+     * than wave the setup through.</p>
+     *
+     * <p>The window is fifteen minutes, set in {@code StructureEngine}. It used to be five, which
+     * sampled the pullback this strategy is built to enter and refused a third of all candidates
+     * for the weakness that defines the setup.</p>
+     */
     public boolean outperformingNifty()  { return niftyRelativeStrength > 0; }
     public boolean outperformingSector() { return sectorRelativeStrength > 0; }
 
