@@ -35,6 +35,7 @@ public record Position(
         double intendedEntryPrice,
         double entryPrice,
         double stopPrice,
+        double originalStopPrice,
         double targetPrice,
         double highWaterMark,
         double lowWaterMark,
@@ -54,14 +55,14 @@ public record Position(
                                         String entryOrderId, Instant at) {
         return new Position(UUID.randomUUID(), userId, symbol, direction, pattern, product,
                 PositionStatus.PENDING_ENTRY, quantity, 0, intendedEntryPrice, 0,
-                stopPrice, targetPrice, 0, 0, at, null, 0, null,
+                stopPrice, stopPrice, targetPrice, 0, 0, at, null, 0, null,
                 entryTag, entryOrderId, null, null);
     }
 
     public Position withFill(int filled, double averagePrice, Instant at) {
         if (filled <= 0) return this;
         return new Position(id, userId, symbol, direction, pattern, product, PositionStatus.OPEN,
-                quantity, filled, intendedEntryPrice, averagePrice, stopPrice, targetPrice,
+                quantity, filled, intendedEntryPrice, averagePrice, stopPrice, originalStopPrice, targetPrice,
                 // Both marks start at the fill: the trade has neither run nor retraced yet.
                 averagePrice, averagePrice, at, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
@@ -70,13 +71,13 @@ public record Position(
     public Position withExitPending(ExitReason reason, OrderTag tag, String orderId) {
         return new Position(id, userId, symbol, direction, pattern, product,
                 PositionStatus.EXIT_PENDING,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, originalStopPrice, targetPrice,
                 highWaterMark, lowWaterMark, openedAt, closedAt, exitPrice, reason, entryTag, entryOrderId, tag, orderId);
     }
 
     public Position withClose(double price, ExitReason reason, Instant at) {
         return new Position(id, userId, symbol, direction, pattern, product, PositionStatus.CLOSED,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, originalStopPrice, targetPrice,
                 highWaterMark, lowWaterMark, openedAt, at, price, reason, entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
@@ -95,7 +96,7 @@ public record Position(
     public Position withStatus(PositionStatus newStatus, Instant at) {
         Instant finishedAt = newStatus.isFinished() && closedAt == null ? at : closedAt;
         return new Position(id, userId, symbol, direction, pattern, product, newStatus,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, originalStopPrice, targetPrice,
                 highWaterMark, lowWaterMark, openedAt, finishedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
@@ -105,7 +106,27 @@ public record Position(
         boolean loosening = direction == Direction.LONG ? newStop < stopPrice : newStop > stopPrice;
         if (loosening) return this;
         return new Position(id, userId, symbol, direction, pattern, product, status,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, newStop, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, newStop, originalStopPrice, targetPrice,
+                highWaterMark, lowWaterMark, openedAt, closedAt, exitPrice, exitReason,
+                entryTag, entryOrderId, exitTag, exitOrderId);
+    }
+
+    /**
+     * The same position with its stop rewound to the one it was opened with.
+     *
+     * <p>Only for counterfactuals. {@link #withStop(double)} refuses to loosen, which is right for a
+     * live trade and wrong for asking what a <em>different</em> policy would have done: a shadow
+     * policy evaluated against a stop the live policy has already tightened is not being evaluated
+     * at all, it is inheriting the live answer. Rewinding first is what keeps the comparison
+     * honest.</p>
+     *
+     * <p>Never handed to the book, never persisted, never used to place an order.</p>
+     */
+    public Position atOriginalStop() {
+        if (originalStopPrice <= 0 || originalStopPrice == stopPrice) return this;
+        return new Position(id, userId, symbol, direction, pattern, product, status,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice,
+                originalStopPrice, originalStopPrice, targetPrice,
                 highWaterMark, lowWaterMark, openedAt, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
@@ -132,7 +153,7 @@ public record Position(
                 : price > lowWaterMark;
         if (!worse) return this;
         return new Position(id, userId, symbol, direction, pattern, product, status,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, originalStopPrice, targetPrice,
                 highWaterMark, price, openedAt, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
@@ -159,14 +180,30 @@ public record Position(
                 : highWaterMark == 0 || price < highWaterMark;
         if (!better) return this;
         return new Position(id, userId, symbol, direction, pattern, product, status,
-                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, targetPrice,
+                quantity, filledQuantity, intendedEntryPrice, entryPrice, stopPrice, originalStopPrice, targetPrice,
                 price, lowWaterMark, openedAt, closedAt, exitPrice, exitReason,
                 entryTag, entryOrderId, exitTag, exitOrderId);
     }
 
-    /** Risk per share the position was opened with. The denominator of every R figure. */
+    /**
+     * Risk per share the position was opened with. The denominator of every R figure.
+     *
+     * <p>Measured against {@code originalStopPrice}, never the current stop. It used to use the
+     * current one, and breakeven then destroyed the scale it was measured on: moving the stop to
+     * entry makes {@code entryPrice - stopPrice} exactly zero, so every R afterwards divided by
+     * nothing. That is why the stop-move log read <b>"after 0.00R"</b> on the very move it was
+     * describing, and why trailing could never arm on a position breakeven had already touched -
+     * {@code StopAdjuster} bails out when risk is not positive.</p>
+     *
+     * <p>R is the risk that was <em>accepted at entry</em>. It is a fact about the trade, fixed the
+     * moment it filled, and no later stop movement can change what was originally risked.</p>
+     */
     public double riskPerShare() {
-        return Math.abs(entryPrice - stopPrice);
+        // Rows restored from before the column existed come back with a zero here, which is an
+        // absent stop and not a stop at zero — testing the distance instead would read it as the
+        // entire entry price of risk.
+        double reference = originalStopPrice > 0 ? originalStopPrice : stopPrice;
+        return Math.abs(entryPrice - reference);
     }
 
     /**
@@ -227,6 +264,8 @@ public record Position(
      * expected price, and if it filled worse the real risk is larger than the budget allowed.</p>
      */
     public double riskAtStop() {
+        // The live stop, deliberately: this is what would be lost if it were hit now, which is a
+        // different question from the one R asks. After breakeven it is correctly zero.
         return Math.abs(entryPrice - stopPrice) * filledQuantity;
     }
 

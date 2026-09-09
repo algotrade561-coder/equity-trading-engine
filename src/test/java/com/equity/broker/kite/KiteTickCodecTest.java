@@ -190,4 +190,85 @@ class KiteTickCodecTest {
                 .as("a zero LTP would compute a -100% move and trigger every stop")
                 .isEmpty();
     }
+
+    /**
+     * A full packet whose every book field is a different number.
+     *
+     * <p>Distinct values throughout, for the same reason the OHLC block uses them: the depth block
+     * is twenty near-identical twelve-byte records, and a read that is one field out would decode
+     * perfectly against a packet built from repeated constants.</p>
+     */
+    private static byte[] fullPacketWithBook(long token, int paise, int lastQty, int avgPaise,
+                                             int volume, int totalBuy, int totalSell,
+                                             int bidQty, int bidPaise, int askQty, int askPaise) {
+        ByteBuffer b = ByteBuffer.allocate(184).order(ByteOrder.BIG_ENDIAN);
+        b.putInt((int) token).putInt(paise);
+        b.putInt(lastQty).putInt(avgPaise).putInt(volume).putInt(totalBuy).putInt(totalSell);
+        b.putInt(OPEN_PAISE).putInt(HIGH_PAISE).putInt(LOW_PAISE).putInt(PREV_CLOSE_PAISE);
+        b.putInt(0);                                    // last trade time
+        b.putInt(0).putInt(0).putInt(0);                // oi, oi high, oi low
+        b.putInt(0);                                    // exchange timestamp
+        for (int i = 0; i < 5; i++) {                   // bid levels, thinning away from the touch
+            b.putInt(i == 0 ? bidQty : 7).putInt(bidPaise - i).putShort((short) 1).putShort((short) 0);
+        }
+        for (int i = 0; i < 5; i++) {                   // ask levels
+            b.putInt(i == 0 ? askQty : 9).putInt(askPaise + i).putShort((short) 1).putShort((short) 0);
+        }
+        return b.array();
+    }
+
+    /**
+     * The four fields the codec used to read past and discard.
+     *
+     * <p>They were dropped on the grounds that the spread was all the strategy consulted. Entries
+     * are MARKET orders, so what rests behind the touch decides the fill, and losses were realising
+     * past 1R against a 1R stop — the book is the only place that can say why. Nothing reads these
+     * yet; they are recorded so the question can be answered from real trades later.</p>
+     */
+    @Test
+    void fullPacketKeepsTheBookAndTradeFlowFields() {
+        List<Tick> ticks = KiteTickCodec.decode(
+                frame(fullPacketWithBook(RELIANCE_TOKEN, 145_055, 37, 144_900, 1_234_567,
+                        820_000, 410_000, 250, 145_050, 175, 145_060)),
+                KiteTickCodecTest::resolve, RECV);
+
+        assertThat(ticks).hasSize(1);
+        var book = ticks.get(0).book();
+        assertThat(book.isPresent()).isTrue();
+        assertThat(book.lastTradedQuantity()).isEqualTo(37);
+        assertThat(book.exchangeVwap())
+                .as("the exchange's own session VWAP, a cross-check against the candle-derived one")
+                .isEqualTo(1449.00);
+        assertThat(book.totalBuyQuantity()).isEqualTo(820_000);
+        assertThat(book.totalSellQuantity()).isEqualTo(410_000);
+        assertThat(book.bidQuantity()).isEqualTo(250);
+        assertThat(book.askQuantity()).isEqualTo(175);
+        assertThat(book.depthAtTouch())
+                .as("what a market buy eats into first, which the spread cannot reveal")
+                .isEqualTo(175);
+        assertThat(book.imbalance()).isEqualTo(2.0);
+
+        // The prices must still decode exactly as before — the depth read now returns a pair, and
+        // getting the tuple order wrong would swap a quantity into a price.
+        assertThat(ticks.get(0).bestBid()).isEqualTo(1450.50);
+        assertThat(ticks.get(0).bestAsk()).isEqualTo(1450.60);
+        assertThat(ticks.get(0).lastPrice()).isEqualTo(1450.55);
+    }
+
+    @Test
+    void quoteAndLtpPacketsCarryNoBookAtAll() {
+        List<Tick> quote = KiteTickCodec.decode(
+                frame(quotePacket(RELIANCE_TOKEN, 145_055, 1_234_567)),
+                KiteTickCodecTest::resolve, RECV);
+        List<Tick> ltp = KiteTickCodec.decode(
+                frame(ltpPacket(RELIANCE_TOKEN, 145_055)), KiteTickCodecTest::resolve, RECV);
+
+        assertThat(quote.get(0).book().isPresent())
+                .as("a quote packet has no depth block, so there is no book to report")
+                .isFalse();
+        assertThat(quote.get(0).book().imbalance())
+                .as("absent must read as NaN, never as balanced — they are different facts")
+                .isNaN();
+        assertThat(ltp.get(0).book().isPresent()).isFalse();
+    }
 }

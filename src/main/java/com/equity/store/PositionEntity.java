@@ -69,6 +69,16 @@ public class PositionEntity {
     private double intendedEntryPrice;
     private double entryPrice;
     private double stopPrice;
+
+    /**
+     * The stop the position was opened with, kept separate because {@code stopPrice} moves.
+     *
+     * <p>Without it a restart cannot say what a trade originally risked, and every R computed after
+     * a breakeven move is measured against a denominator of zero.</p>
+     */
+    @Column(name = "original_stop_price")
+    private double originalStopPrice;
+
     private double targetPrice;
     private double highWaterMark;
 
@@ -115,6 +125,7 @@ public class PositionEntity {
         this.intendedEntryPrice = p.intendedEntryPrice();
         this.entryPrice = p.entryPrice();
         this.stopPrice = p.stopPrice();
+        this.originalStopPrice = p.originalStopPrice();
         this.targetPrice = p.targetPrice();
         this.highWaterMark = p.highWaterMark();
         this.lowWaterMark = p.lowWaterMark();
@@ -138,7 +149,7 @@ public class PositionEntity {
                 ProductType.valueOf(product),
                 PositionStatus.valueOf(status),
                 quantity, filledQuantity, intendedEntryPrice, entryPrice,
-                stopPrice, targetPrice, highWaterMark, lowWaterMark,
+                stopPrice, originalStopPrice, targetPrice, highWaterMark, lowWaterMark,
                 openedAt, closedAt, exitPrice,
                 exitReason == null ? null : ExitReason.valueOf(exitReason),
                 entryTag == null ? null : new OrderTag(entryTag), entryOrderId,

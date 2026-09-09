@@ -21,6 +21,8 @@ import com.equity.domain.risk.RiskDecision;
 import com.equity.domain.user.UserId;
 import com.equity.platform.time.TradingClock;
 import com.equity.strategy.ExitPolicy;
+import com.equity.strategy.ShadowExits;
+import com.equity.strategy.ShadowExits.ShadowOutcome;
 import com.equity.strategy.StopAdjuster;
 import com.equity.user.UserAccount;
 import java.time.Duration;
@@ -66,6 +68,15 @@ public class PositionLifecycle {
     private final ExitQueue exits = new ExitQueue();
 
     /**
+     * What the other exit policies would have done to these same trades.
+     *
+     * <p>Owned here rather than injected because this class is the only thing that knows a position
+     * has been marked and not yet exited — design note 0.2 — and a shadow evaluated anywhere else
+     * would be reading a position mid-transition.</p>
+     */
+    private final ShadowExits shadows = new ShadowExits();
+
+    /**
      * Entries whose submission failed in a way that does not prove the order never landed.
      *
      * <p>A timeout is not a rejection. The request may have reached the exchange and filled, and the
@@ -82,6 +93,14 @@ public class PositionLifecycle {
 
     /** Notified when an entry attempt fails, so the strategy can release the setup. */
     private volatile BiConsumer<UserId, String> entryFailureListener = (u, s) -> {};
+
+    /**
+     * Notified when a position closes, with what each shadow policy would have made on it.
+     *
+     * <p>A listener rather than a journal dependency: this class must be constructible in a test
+     * with a broker, a book and a clock, and recording is not its job.</p>
+     */
+    private volatile BiConsumer<Position, ShadowOutcome> outcomeListener = (p, r) -> {};
 
     /**
      * Current ATR per symbol, and each user's exit policy.
@@ -111,6 +130,13 @@ public class PositionLifecycle {
     public void setExitPolicySource(java.util.function.Function<UserId, ExitPolicy> source) {
         this.exitPolicySource = source;
     }
+
+    public void onOutcome(BiConsumer<Position, ShadowOutcome> listener) {
+        this.outcomeListener = listener;
+    }
+
+    /** The counterfactual evaluator, for diagnostics and for clearing on a restart. */
+    public ShadowExits shadows() { return shadows; }
 
     /**
      * What happened to an entry attempt.
@@ -229,8 +255,10 @@ public class PositionLifecycle {
             // whether a stop is too tight.
             Position marked = position.withHighWaterMark(tick.lastPrice())
                     .withLowWaterMark(tick.lastPrice());
+            double atr = atrSource.applyAsDouble(position.symbol());
+            shadows.onTick(marked, tick.lastPrice(), atr);
             Position adjusted = StopAdjuster.adjust(marked, exitPolicySource.apply(position.userId()),
-                    atrSource.applyAsDouble(position.symbol()));
+                    atr);
             if (adjusted != position) {
                 book.put(adjusted);
                 if (StopAdjuster.moved(position, adjusted)) {
@@ -420,13 +448,16 @@ public class PositionLifecycle {
         // falls back, now saying so rather than passing it off as a result.
         boolean known = price > 0;
         double at = known ? price : position.entryPrice();
-        book.put(position.withClose(at, ExitReason.MANUAL, clock.now()));
+        Position closed = position.withClose(at, ExitReason.MANUAL, clock.now());
+        book.put(closed);
+        // Still a real trade with real shadows behind it. Only when the price is unknown is the
+        // comparison worthless, and settling it anyway would silently pollute a month of them.
+        if (known) recordOutcome(closed); else shadows.settle(position);
 
         if (known) {
             log.warn("EXTERNALLY CLOSED {} {} at {} pnl {} — {}. The engine did not send this exit.",
                     position.userId(), position.symbol(), at,
-                    String.format("%.2f", position.withClose(at, ExitReason.MANUAL,
-                            clock.now()).realisedPnl()), note);
+                    String.format("%.2f", closed.realisedPnl()), note);
         } else {
             log.error("EXTERNALLY CLOSED {} {} but no exit price could be established, so it is "
                     + "booked flat at the entry of {}. THE REALISED P&L FOR THIS TRADE IS WRONG — "
@@ -521,12 +552,29 @@ public class PositionLifecycle {
                     String.format("%.2f", closed.cost().total()),
                     String.format("%.2f", closed.favourableExcursionR()),
                     String.format("%.2f", closed.adverseExcursionR()));
+            recordOutcome(closed);
         } else if (order.status() == OrderStatus.REJECTED || order.status() == OrderStatus.CANCELLED) {
             // Put it back to OPEN so the next tick can raise the exit again. An exit that failed
             // must not leave the position permanently marked as exiting and therefore ignored.
             log.error("EXIT ORDER {} for {} {} was {} — position is still open",
                     order.brokerOrderId(), position.userId(), position.symbol(), order.status());
             book.put(position.withStatus(PositionStatus.OPEN));
+        }
+    }
+
+    /**
+     * Hands the closed trade and its counterfactuals to whoever is recording them.
+     *
+     * <p>Wrapped because it runs on the broker's order-update thread. A journal that threw there
+     * would abort the close handler, and the position would stay marked EXIT_PENDING with the shares
+     * already sold — losing a diagnostic row must never cost the engine its view of reality.</p>
+     */
+    private void recordOutcome(Position closed) {
+        try {
+            outcomeListener.accept(closed, shadows.settle(closed));
+        } catch (RuntimeException e) {
+            log.warn("could not record the outcome of {} {}: {}",
+                    closed.userId(), closed.symbol(), e.toString());
         }
     }
 

@@ -21,7 +21,23 @@ import java.time.Instant;
 public record Tick(String symbol, double lastPrice, long cumulativeVolume,
                    double bestBid, double bestAsk,
                    double dayOpen, double dayHigh, double dayLow, double previousClose,
-                   Instant exchangeTime, Instant receivedAt) {
+                   Instant exchangeTime, Instant receivedAt,
+                   BookState book) {
+
+    /**
+     * Without book state — quote and LTP packets, and every test that does not care about depth.
+     *
+     * <p>An explicit overload rather than a nullable field: {@link BookState#NONE} answers every
+     * question with a zero or a NaN, so a caller cannot accidentally read an absent book as a
+     * balanced one.</p>
+     */
+    public Tick(String symbol, double lastPrice, long cumulativeVolume,
+                double bestBid, double bestAsk,
+                double dayOpen, double dayHigh, double dayLow, double previousClose,
+                Instant exchangeTime, Instant receivedAt) {
+        this(symbol, lastPrice, cumulativeVolume, bestBid, bestAsk,
+                dayOpen, dayHigh, dayLow, previousClose, exchangeTime, receivedAt, BookState.NONE);
+    }
 
     /** A tick with no depth and no OHLC — what LTP mode delivers, and what tests usually want. */
     public static Tick ltp(String symbol, double lastPrice, long cumulativeVolume, Instant at) {

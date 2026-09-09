@@ -176,6 +176,7 @@ public class SessionOrchestrator {
         // so the lifecycle keeps no opinion about where either lives.
         lifecycle.setAtrSource(symbol -> structure.state(symbol)
                 .map(SharedInstrumentState::atr).orElse(Double.NaN));
+        lifecycle.onOutcome(journal::tradeOutcome);
         lifecycle.setExitPolicySource(userId -> users.find(userId)
                 .map(UserAccount::exitPolicy).orElseGet(com.equity.strategy.ExitPolicy::fixed));
 
@@ -212,7 +213,7 @@ public class SessionOrchestrator {
             journal.intent(account.userId(), state.get(),
                     strategy.setupFor(account.userId(), tick.symbol()),
                     signal.intent().referencePrice(), signal.intent().stopPrice(),
-                    signal.intent().targetPrice(), account.mayOpen());
+                    signal.intent().targetPrice(), account.mayOpen(), tick.book());
 
             if (account.mayOpen()) {
                 attemptEntry(account, signal, state.get(), tick);

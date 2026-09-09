@@ -1,5 +1,6 @@
 package com.equity.broker.kite;
 
+import com.equity.domain.market.BookState;
 import com.equity.domain.market.Tick;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -96,6 +97,9 @@ public final class KiteTickCodec {
 
         long cumulativeVolume = 0;
         double bestBid = 0, bestAsk = 0;
+        long bidQuantity = 0, askQuantity = 0;
+        long totalBuyQuantity = 0, totalSellQuantity = 0, lastTradedQuantity = 0;
+        double exchangeVwap = 0;
         double dayOpen = 0, dayHigh = 0, dayLow = 0, previousClose = 0;
         Instant exchangeTime = receivedAt;
 
@@ -113,11 +117,15 @@ public final class KiteTickCodec {
                 if (ts > 0) exchangeTime = Instant.ofEpochSecond(ts);
             }
         } else if (len >= LEN_QUOTE) {
-            p.getInt();                                   // last traded quantity
-            p.getInt();                                   // average traded price
+            // These four were read and dropped. They cost nothing to keep — the bytes are already
+            // on the wire and already being parsed — and they are the only view the engine gets of
+            // resting interest and trade size. Entries are MARKET orders, so what rests behind the
+            // touch decides the fill; the spread alone cannot say whether a book is deep or thin.
+            lastTradedQuantity = p.getInt() & 0xFFFFFFFFL;
+            exchangeVwap = p.getInt() / PAISE;
             cumulativeVolume = p.getInt() & 0xFFFFFFFFL;  // cumulative day volume
-            p.getInt();                                   // total buy quantity
-            p.getInt();                                   // total sell quantity
+            totalBuyQuantity = p.getInt() & 0xFFFFFFFFL;
+            totalSellQuantity = p.getInt() & 0xFFFFFFFFL;
             // The OHLC block. `close` is the PREVIOUS day's close during a session, which is the
             // denominator of every day-change figure and therefore of the whole gainer ranking.
             dayOpen = p.getInt() / PAISE;
@@ -136,23 +144,37 @@ public final class KiteTickCodec {
                 // 5 bid levels then 5 ask levels; each is qty(4) price(4) orders(2) padding(2).
                 // Only the top of book is kept — the spread check is all the strategy needs, and
                 // retaining 10 levels per tick for 200 symbols is a lot of garbage per second.
-                bestBid = readTopOfBook(p);
-                bestAsk = readTopOfBook(p);
+                long[] bid = readTopOfBook(p);
+                long[] ask = readTopOfBook(p);
+                bidQuantity = bid[0];
+                bestBid = bid[1] / PAISE;
+                askQuantity = ask[0];
+                bestAsk = ask[1] / PAISE;
             }
         }
 
+        BookState book = new BookState(bidQuantity, askQuantity, totalBuyQuantity,
+                totalSellQuantity, lastTradedQuantity, exchangeVwap);
         return new Tick(symbol, lastPrice, cumulativeVolume, bestBid, bestAsk,
-                dayOpen, dayHigh, dayLow, previousClose, exchangeTime, receivedAt);
+                dayOpen, dayHigh, dayLow, previousClose, exchangeTime, receivedAt, book);
     }
 
-    /** Reads the first of five depth entries and skips the remaining four. */
-    private static double readTopOfBook(ByteBuffer p) {
-        if (p.remaining() < 60) return 0;
-        p.getInt();                          // quantity
-        double price = p.getInt() / PAISE;
+    /**
+     * Reads the first of five depth entries and skips the remaining four.
+     *
+     * <p>Levels two to five are still skipped deliberately: ten levels per tick across five hundred
+     * symbols is a great deal of short-lived garbage, and nothing yet asks a question that needs
+     * them. The quantity at the touch is kept, because that is the one that decides a market fill.</p>
+     *
+     * @return {@code [quantity, priceInPaise]}
+     */
+    private static long[] readTopOfBook(ByteBuffer p) {
+        if (p.remaining() < 60) return new long[]{0, 0};
+        long quantity = p.getInt() & 0xFFFFFFFFL;
+        long price = p.getInt();
         p.getShort();                        // order count
         p.getShort();                        // padding
         p.position(p.position() + 48);       // skip levels 2..5
-        return price;
+        return new long[]{quantity, price};
     }
 }

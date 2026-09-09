@@ -118,17 +118,92 @@ public class DecisionJournal {
                 + ",\"from\":" + quote(from) + ",\"to\":" + quote(to) + "}");
     }
 
-    /** A setup that triggered. The numerator of every hit rate worth computing. */
+    /**
+     * A setup that triggered. The numerator of every hit rate worth computing.
+     *
+     * <p>Carries the order book as it stood at the trigger. Nothing reads those fields yet — they
+     * are here so that in a month "did entries into a thicker book fare better?" is a query rather
+     * than an argument. Entries are MARKET orders, so resting depth decides the fill, and the spread
+     * check cannot distinguish a tight quote on fifty shares from one on five thousand.</p>
+     */
     public void intent(UserId userId, SharedInstrumentState state, SetupState setup,
-                       double entry, double stop, double target, boolean armed) {
+                       double entry, double stop, double target, boolean armed,
+                       com.equity.domain.market.BookState book) {
         if (!enabled) return;
+        com.equity.domain.market.BookState b =
+                book == null ? com.equity.domain.market.BookState.NONE : book;
         offer(row("intent", userId, state, setup)
                 + ",\"entry\":" + num(entry)
                 + ",\"stop\":" + num(stop)
                 + ",\"target\":" + num(target)
                 + ",\"riskPerShare\":" + num(entry - stop)
                 + ",\"userArmed\":" + armed
+                + ",\"bidQty\":" + b.bidQuantity()
+                + ",\"askQty\":" + b.askQuantity()
+                + ",\"totalBuyQty\":" + b.totalBuyQuantity()
+                + ",\"totalSellQty\":" + b.totalSellQuantity()
+                + ",\"bookImbalance\":" + num(b.imbalance())
+                + ",\"lastTradedQty\":" + b.lastTradedQuantity()
+                + ",\"exchangeVwap\":" + num(b.exchangeVwap())
                 + "}");
+    }
+
+    /**
+     * A finished trade, and what every other exit policy would have made on it.
+     *
+     * <p>The row that closes the loop. Rejections and intents say what the engine thought; this says
+     * what happened, on the same timeline, in the same file — so a month of them can be joined on
+     * symbol and time without reconciling two sources.</p>
+     *
+     * <p>The shadow figures are the reason to keep it. They are the only paired evidence there will
+     * ever be about the exit: the same entry, the same tape, five policies, one row. Comparing the
+     * live policy against a replay compares it against a different market; comparing it against
+     * these compares it against itself.</p>
+     *
+     * <p>Does not go through {@link #row} — that needs an instrument snapshot, and this is written
+     * from the order-update thread, which has a position and nothing else.</p>
+     */
+    public void tradeOutcome(com.equity.domain.position.Position p, ShadowExits.ShadowOutcome shadows) {
+        if (!enabled || p == null || shadows == null) return;
+        StringBuilder b = new StringBuilder(512);
+        b.append("{\"ts\":\"").append(clock.now()).append('"')
+                .append(",\"kind\":\"outcome\"")
+                .append(",\"user\":\"").append(p.userId()).append('"')
+                .append(",\"symbol\":").append(quote(p.symbol()))
+                .append(",\"pattern\":\"").append(p.pattern() == null ? "" : p.pattern()).append('"')
+                .append(",\"direction\":\"").append(p.direction()).append('"')
+                .append(",\"qty\":").append(p.filledQuantity())
+                .append(",\"intendedEntry\":").append(num(p.intendedEntryPrice()))
+                .append(",\"entry\":").append(num(p.entryPrice()))
+                .append(",\"exit\":").append(num(p.exitPrice()))
+                // The stop as it was set at entry AND as it finished, because they differ whenever
+                // the exit policy moved it, and every R below is measured against the first.
+                .append(",\"originalStop\":").append(num(p.originalStopPrice()))
+                .append(",\"finalStop\":").append(num(p.stopPrice()))
+                .append(",\"target\":").append(num(p.targetPrice()))
+                .append(",\"riskPerShare\":").append(num(p.riskPerShare()))
+                .append(",\"exitReason\":\"").append(p.exitReason() == null ? "" : p.exitReason()).append('"')
+                .append(",\"openedAt\":\"").append(p.openedAt()).append('"')
+                // Quoted only when present: a literal "null" string would parse as a timestamp of
+                // that name and break every duration computed over a month of these rows.
+                .append(",\"closedAt\":")
+                .append(p.closedAt() == null ? "null" : "\"" + p.closedAt() + "\"")
+                .append(",\"pnl\":").append(num(p.realisedPnl()))
+                .append(",\"netPnl\":").append(num(p.netPnl()))
+                .append(",\"charges\":").append(num(p.cost().total()))
+                .append(",\"mfeR\":").append(num(p.favourableExcursionR()))
+                .append(",\"maeR\":").append(num(p.adverseExcursionR()))
+                // How much of this trade the shadows actually saw. 0 for one watched from its
+                // fill; anything else means the comparison below is missing the opening move.
+                .append(",\"shadowWatchedFromR\":").append(num(shadows.watchedFromR()))
+                .append(",\"shadow\":{");
+        boolean first = true;
+        for (java.util.Map.Entry<String, Double> e : shadows.pnl().entrySet()) {
+            if (!first) b.append(',');
+            b.append(quote(e.getKey())).append(':').append(num(e.getValue()));
+            first = false;
+        }
+        offer(b.append("}}").toString());
     }
 
     /**

@@ -157,4 +157,71 @@ class StopAdjusterTest {
                 .as("nothing is held yet, so there is nothing to protect")
                 .isEqualTo(990);
     }
+
+    // ── R survives the stop moving ───────────────────────────────────────────
+
+    /**
+     * R is the risk accepted at entry, and nothing later can change what was originally risked.
+     *
+     * <p>It used to be measured against the current stop, so breakeven destroyed the scale it was
+     * measured on: moving the stop to the entry makes {@code entry - stop} exactly zero and every R
+     * afterwards divides by nothing. The visible symptom was the stop-move log reporting
+     * <b>"after 0.00R"</b> on the very move it was describing.</p>
+     */
+    @Test
+    void breakevenDoesNotCollapseTheScaleThatMeasuresIt() {
+        Position atOneR = openAt(1010);
+        Position moved = StopAdjuster.adjust(atOneR, ExitPolicy.breakevenAtOneR(), ATR);
+
+        assertThat(moved.stopPrice()).isEqualTo(1000);
+        assertThat(moved.riskPerShare())
+                .as("the trade risked 10 a share and always will have")
+                .isEqualTo(10.0);
+        assertThat(moved.favourableExcursionR())
+                .as("it reached exactly 1R, which is why the stop moved at all — reporting 0.00R "
+                        + "here made every stop-move log line useless")
+                .isEqualTo(1.0);
+        assertThat(moved.riskAtStop())
+                .as("rupees still at risk is a different question and is correctly zero now")
+                .isZero();
+    }
+
+    /**
+     * Trailing has to keep working on a position breakeven has already touched.
+     *
+     * <p>{@link StopAdjuster} refuses to act when risk per share is not positive. With R measured
+     * against a stop that breakeven had zeroed, a policy running both would arm breakeven once and
+     * then never trail again — the trailing half silently switched itself off at 1R, which is
+     * exactly where it was supposed to start.</p>
+     */
+    @Test
+    void trailingStillArmsAfterBreakevenHasMovedTheStop() {
+        ExitPolicy both = new ExitPolicy(true, 1.0, true, 1.0, 1.5, false);
+
+        Position atOneR = StopAdjuster.adjust(openAt(1010), both, ATR);
+        // 1010 high, 1.5 x 4.0 behind it is 1004, tighter than the breakeven 1000.
+        assertThat(atOneR.stopPrice()).isEqualTo(1004);
+
+        Position later = StopAdjuster.adjust(atOneR.withHighWaterMark(1018), both, ATR);
+        assertThat(later.stopPrice())
+                .as("still trailing at 1.5 ATR behind the new high, not frozen at breakeven")
+                .isEqualTo(1012);
+    }
+
+    @Test
+    void aPositionRestoredWithoutAnOriginalStopFallsBackToTheOneItHas() {
+        // Rows written before the column existed come back with zero there. Falling back to the
+        // current stop keeps their R approximately right rather than reporting no risk at all.
+        Position p = openAt(1010);
+        Position restored = new Position(p.id(), p.userId(), p.symbol(), p.direction(), p.pattern(),
+                p.product(), p.status(), p.quantity(), p.filledQuantity(), p.intendedEntryPrice(),
+                p.entryPrice(), 990, 0, p.targetPrice(), p.highWaterMark(), p.lowWaterMark(),
+                p.openedAt(), p.closedAt(), p.exitPrice(), p.exitReason(), p.entryTag(),
+                p.entryOrderId(), p.exitTag(), p.exitOrderId());
+
+        assertThat(restored.riskPerShare()).isEqualTo(10.0);
+        assertThat(restored.atOriginalStop())
+                .as("nothing to rewind to, so it must be left exactly as it is")
+                .isSameAs(restored);
+    }
 }
