@@ -446,4 +446,50 @@ class PositionLifecycleTest {
         assertThat(book.byId(open.id()).orElseThrow().status()).isEqualTo(PositionStatus.OPEN);
         assertThat(filled).as("only the transition out of PENDING_ENTRY is a fill").isEmpty();
     }
+
+    /**
+     * A fill for a different stock must be refused, not booked.
+     *
+     * <p>This is the 10 September failure. Three restarts reissued the tag {@code ...-000001}, the
+     * broker echoed it back on PNBHOUSING's fill, and the engine matched it to a stale ZFCVINDIA
+     * position. ZFCVINDIA was booked at PNBHOUSING's price with ZFCVINDIA's stop — a stop above the
+     * entry — and reported a fictional profit, while PNBHOUSING kept a quantity of zero and its 170
+     * real shares were skipped by the exit machinery, which only looks at positions with exposure.</p>
+     *
+     * <p>Dropping the update is strictly better: reconciliation finds an unapplied fill on its next
+     * pass, and cannot find a misapplied one at all.</p>
+     */
+    @Test
+    void aFillForAnotherSymbolIsRefusedRatherThanBookedToTheWrongPosition() {
+        Position position = lifecycle.open(account, intent(), approval(), account.epoch()).position();
+        String reusedTag = position.entryTag().value();
+
+        // Same tag, different stock — only possible when a tag has been reused.
+        lifecycle.onOrderUpdate(account.userId(), new BrokerOrder("o9", "PNBHOUSING", OrderSide.BUY,
+                OrderStatus.COMPLETE, 170, 170, 1172.33, "", NOW, reusedTag), account);
+
+        Position after = book.byId(position.id()).orElseThrow();
+        assertThat(after.status())
+                .as("the RELIANCE position must not be opened by a PNBHOUSING fill")
+                .isEqualTo(PositionStatus.PENDING_ENTRY);
+        assertThat(after.filledQuantity()).isZero();
+        assertThat(after.entryPrice())
+                .as("booking 1172.33 against a stop of 990 would make the stop meaningless")
+                .isZero();
+        assertThat(lifecycle.misattributedUpdates())
+                .as("counted, because this must never happen and silence would hide it")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void aFillForTheRightSymbolStillApplies() {
+        Position position = lifecycle.open(account, intent(), approval(), account.epoch()).position();
+        lifecycle.onOrderUpdate(account.userId(),
+                fill(position.entryTag().value(), 100, 1000), account);
+
+        assertThat(book.byId(position.id()).orElseThrow().status()).isEqualTo(PositionStatus.OPEN);
+        assertThat(lifecycle.misattributedUpdates())
+                .as("the guard must not fire on the ordinary path")
+                .isZero();
+    }
 }

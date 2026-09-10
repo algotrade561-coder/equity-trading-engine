@@ -22,10 +22,21 @@ public interface PositionStore {
     /** Positions that still held shares when the process stopped. */
     List<Position> loadOpen();
 
+    /**
+     * Every position opened today, whatever became of it.
+     *
+     * <p>Wider than {@link #loadOpen()} on purpose. Order tags have to stay unique for the whole
+     * session, and a tag on a position that has since closed is every bit as reusable as one on a
+     * position still running — the collision that misbooked a fill was against a stock the engine
+     * had already finished with.</p>
+     */
+    List<Position> loadForToday();
+
     static PositionStore inMemory() {
         return new PositionStore() {
             @Override public void save(Position position) { }
             @Override public List<Position> loadOpen() { return List.of(); }
+            @Override public List<Position> loadForToday() { return List.of(); }
         };
     }
 }

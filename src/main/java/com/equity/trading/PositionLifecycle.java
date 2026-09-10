@@ -91,6 +91,9 @@ public class PositionLifecycle {
     private final AtomicLong stopsTightened = new AtomicLong();
     private final AtomicLong adoptedOrphans = new AtomicLong();
 
+    /** Order updates refused because the tag resolved to a different stock. Must stay at zero. */
+    private final AtomicLong misattributedUpdates = new AtomicLong();
+
     /** Notified when an entry attempt fails, so the strategy can release the setup. */
     private volatile BiConsumer<UserId, String> entryFailureListener = (u, s) -> {};
 
@@ -491,6 +494,20 @@ public class PositionLifecycle {
      *
      * <p>Matched on the tag, not on the symbol: a user can hold the same stock through two separate
      * positions over a session, and matching on symbol would apply one order's fill to the other.</p>
+     *
+     * <h2>The tag is the key, but the symbol is the check</h2>
+     * <p>That reasoning is right and its assumption — that tags are unique — was wrong. The sequence
+     * lived in a static counter that reset to zero on every restart, so three restarts in one session
+     * minted {@code ...-000001} three times, for three different stocks. PNBHOUSING's fill was booked
+     * against a stale ZFCVINDIA position: PNBHOUSING stayed PENDING_ENTRY with no exposure, so the
+     * exit machinery skipped it and 170 shares sat with no stop, while the engine reported a
+     * fictional Rs 227,234 profit on a position it had never really held.</p>
+     *
+     * <p>{@link OrderTag} no longer reuses a sequence, but uniqueness is an argument and this is a
+     * check. A tag that resolves to a position in a different stock is <b>always</b> a defect, and
+     * booking it is strictly worse than dropping it: an unapplied fill is found by the next
+     * reconciliation pass, whereas a misapplied one corrupts two positions and hides a live holding.
+     * So this refuses loudly and lets reconciliation do its job.</p>
      */
     public synchronized void onOrderUpdate(UserId userId, BrokerOrder order, UserAccount account) {
         Optional<Position> match = book.forUser(userId).stream()
@@ -499,6 +516,16 @@ public class PositionLifecycle {
         if (match.isEmpty()) return;
 
         Position position = match.get();
+        if (order.symbol() != null && !order.symbol().equals(position.symbol())) {
+            log.error("REFUSING a {} update for {} tagged {} — that tag belongs to a {} position. "
+                            + "The tag has been reused, which must not happen; leaving both alone so "
+                            + "reconciliation can adopt the real fill. Check for a holding in {} with "
+                            + "no stop.",
+                    order.symbol(), order.brokerOrderId(), order.tag(), position.symbol(),
+                    order.symbol());
+            misattributedUpdates.incrementAndGet();
+            return;
+        }
         boolean isEntry = position.entryTag() != null
                 && position.entryTag().value().equals(order.tag());
 
@@ -590,4 +617,7 @@ public class PositionLifecycle {
     public long disownedFills()     { return disownedFills.get(); }
     public long stopsTightened()    { return stopsTightened.get(); }
     public long adoptedOrphans()    { return adoptedOrphans.get(); }
+
+    /** Non-zero means a tag was reused and a fill was dropped rather than booked to the wrong stock. */
+    public long misattributedUpdates() { return misattributedUpdates.get(); }
 }

@@ -54,4 +54,14 @@ public class JpaPositionStore implements PositionStore {
                 .map(PositionEntity::toPosition)
                 .toList();
     }
+
+    /** Reads the trading-date index, which every question bounded by a session already uses. */
+    @Override
+    @Transactional(readOnly = true)
+    public List<Position> loadForToday() {
+        return repository.findByTradingDate(clock.tradingDate())
+                .stream()
+                .map(PositionEntity::toPosition)
+                .toList();
+    }
 }

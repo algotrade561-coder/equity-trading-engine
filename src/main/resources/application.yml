@@ -81,8 +81,8 @@ equity:
     # streams quotes and the day's strongest names are promoted — only those can produce an entry,
     # because the risk check refuses an entry without depth.
     evaluate-all: false
-    enter-rank: 20          # promoted to full depth at or above this rank
-    exit-rank: 35           # demoted below it; the gap is hysteresis, not indecision
+    enter-rank: 50          # promoted to full depth at or above this rank
+    exit-rank: 75          # demoted below it; the gap is hysteresis, not indecision
     sanity-band-percent: 25 # a day change beyond this reads as an unadjusted split, not a move
 
   auth:

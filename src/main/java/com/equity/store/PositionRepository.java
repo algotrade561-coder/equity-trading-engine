@@ -13,4 +13,7 @@ public interface PositionRepository extends JpaRepository<PositionEntity, Long> 
 
     /** Everything still holding shares, across users — what a restart has to reconcile. */
     List<PositionEntity> findByStatusIn(List<String> statuses);
+
+    /** Every position of one session, closed ones included. Used to resume the order-tag sequence. */
+    List<PositionEntity> findByTradingDate(LocalDate tradingDate);
 }

@@ -55,12 +55,50 @@ public class PositionBook {
      */
     @jakarta.annotation.PostConstruct
     public void restore() {
+        resumeOrderTagSequence();
+
         List<Position> open = store.loadOpen();
         open.forEach(p -> positions.put(p.id(), p));
         if (!open.isEmpty()) {
             org.slf4j.LoggerFactory.getLogger(PositionBook.class).warn(
                     "restored {} position(s) still holding shares from a previous run: {}",
                     open.size(), open.stream().map(Position::symbol).toList());
+        }
+    }
+
+    /**
+     * Carries the day's order-tag numbering across the restart.
+     *
+     * <p>Done here because this is where the day's positions are already being read, and it must
+     * happen before anything can place an order. Without it the sequence restarts at one and reissues
+     * tags the session has already spent: on 10 September three restarts minted {@code ...-000001}
+     * for ACUTAAS, ZFCVINDIA and PNBHOUSING, and PNBHOUSING's fill was booked against ZFCVINDIA.
+     * Its own row kept a quantity of zero, so the exit machinery — which only looks at positions with
+     * exposure — never saw the 170 shares the broker was holding.</p>
+     *
+     * <p>Failing to read the store is logged and tolerated rather than thrown. A tag collision needs
+     * a restart <i>and</i> a matching sequence <i>and</i> a live order; refusing to start at all
+     * would strand any position already open, which is the worse failure.</p>
+     */
+    private void resumeOrderTagSequence() {
+        org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PositionBook.class);
+        try {
+            long highest = store.loadForToday().stream()
+                    .flatMap(p -> java.util.stream.Stream.of(p.entryTag(), p.exitTag()))
+                    .filter(java.util.Objects::nonNull)
+                    .mapToLong(com.equity.domain.order.OrderTag::sequence)
+                    .max()
+                    .orElse(0);
+            if (highest > 0) {
+                com.equity.domain.order.OrderTag.resumeAfter(highest);
+                log.info("order tags resume at {} — {} order(s) already placed today, and reusing a "
+                        + "tag would let the broker's echo match the wrong position",
+                        highest + 1, highest);
+            }
+        } catch (RuntimeException e) {
+            log.error("could not read today's order tags, so the sequence starts from zero: {}. "
+                    + "A fill may be matched to the wrong position if this process places an order "
+                    + "with a tag an earlier one already used.", e.toString());
         }
     }
 
