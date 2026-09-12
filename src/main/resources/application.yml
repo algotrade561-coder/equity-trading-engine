@@ -1,5 +1,8 @@
 server:
   port: 8090
+  # Behind Caddy every request arrives as plain HTTP from localhost. Without this the OAuth
+  # redirect URI and every absolute URL are built as http://, and Google refuses the callback.
+  forward-headers-strategy: framework
 
 spring:
   application:
