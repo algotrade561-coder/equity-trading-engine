@@ -58,7 +58,7 @@ class SessionCandleStoreTest {
         // A cold engine, as it would be one second after a restart.
         CandleEngine candles = new CandleEngine();
         StructureEngine structure = new StructureEngine(candles);
-        var restored = new SessionCandleStore(repository, candles, structure, clock, true, 5);
+        var restored = new SessionCandleStore(repository, candles, structure, clock, true);
 
         restored.restoreToday();
 
@@ -80,7 +80,7 @@ class SessionCandleStoreTest {
 
         CandleEngine candles = new CandleEngine();
         StructureEngine structure = new StructureEngine(candles);
-        new SessionCandleStore(repository, candles, structure, clock, true, 5).restoreToday();
+        new SessionCandleStore(repository, candles, structure, clock, true).restoreToday();
 
         double full = structure.state("INFY").orElseThrow().vwap();
 
@@ -109,7 +109,7 @@ class SessionCandleStoreTest {
         candles.onCandleClosed(published::add);
         StructureEngine structure = new StructureEngine(candles);
 
-        new SessionCandleStore(repository, candles, structure, clock, true, 5).restoreToday();
+        new SessionCandleStore(repository, candles, structure, clock, true).restoreToday();
 
         assertThat(published)
                 .as("replaying these would advance setups and could trigger on an hours-old price")
@@ -127,7 +127,7 @@ class SessionCandleStoreTest {
         Candle live = new Candle("WIPRO", Timeframe.M1, OPEN, 999, 999, 999, 999, 1);
         candles.seed("WIPRO", Timeframe.M1, List.of(live));
 
-        new SessionCandleStore(repository, candles, new StructureEngine(candles), clock, true, 5)
+        new SessionCandleStore(repository, candles, new StructureEngine(candles), clock, true)
                 .restoreToday();
 
         assertThat(candles.history("WIPRO", Timeframe.M1))

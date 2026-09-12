@@ -130,13 +130,21 @@ equity:
     secret-key: ${EQUITY_SECRET_KEY:}
 
   # ── What is kept for later analysis ─────────────────────────────────────────
-  # Every question worth asking of this engine a month from now replays the price path: whether a
-  # stop was too tight, whether a target left money behind, what a different exit policy would have
-  # returned. None of it can be answered from a position row. Five days was sized for what a restart
-  # needs, which is a day, and would have deleted the evidence before the question was asked.
+  # The session's 1-minute bars are kept in the database so a restart resumes instead of warming up.
+  # That needs today's bars. Older sessions are the price-path evidence every question about a stop
+  # or a target replays, so they are kept — but as gzipped CSV in the archive, not in the trading
+  # database: thirty megabytes a session next to the positions and the ledger on an eight-gigabyte
+  # disk is how the disk fills. A session leaves the table only after it is verifiably archived.
   candles:
     persist: true
-    retention-days: 90        # ~25MB a session, so roughly 2GB
+    retention-days: 7          # sessions stay in the database this long, then are archived and removed
+    hard-limit-days: 60        # if archiving has failed for this long, delete anyway (ERROR) — disk before history
+    archive:
+      # Empty bucket means a local directory. On the instance: the artefact bucket, via the instance role.
+      s3-bucket: ${CANDLE_ARCHIVE_BUCKET:}
+      s3-prefix: candles
+      directory: ./data/candle-archive
+      work-directory: ./data/candle-archive/.work
   journal:
     enabled: true
     directory: ./data/journal

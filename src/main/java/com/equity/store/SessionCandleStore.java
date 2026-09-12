@@ -55,7 +55,6 @@ public class SessionCandleStore {
     private final StructureEngine structure;
     private final TradingClock clock;
     private final boolean enabled;
-    private final int retentionDays;
 
     private final ConcurrentLinkedQueue<Candle> pending = new ConcurrentLinkedQueue<>();
     private final AtomicInteger saved = new AtomicInteger();
@@ -72,14 +71,12 @@ public class SessionCandleStore {
 
     public SessionCandleStore(CandleRepository repository, CandleEngine candles,
                               StructureEngine structure, TradingClock clock,
-                              @Value("${equity.candles.persist:true}") boolean enabled,
-                              @Value("${equity.candles.retention-days:90}") int retentionDays) {
+                              @Value("${equity.candles.persist:true}") boolean enabled) {
         this.repository = repository;
         this.candles = candles;
         this.structure = structure;
         this.clock = clock;
         this.enabled = enabled;
-        this.retentionDays = retentionDays;
 
         if (enabled) {
             // Registered here rather than in the orchestrator so persistence cannot be forgotten
@@ -228,26 +225,6 @@ public class SessionCandleStore {
         repository.save(row);
     }
 
-    /**
-     * Old sessions are pruned, but far later than a restart needs them.
-     *
-     * <p>Five days was the original window, chosen for what a restart requires — which is a day.
-     * That is the wrong criterion: every question worth asking of this engine a month from now needs
-     * the price path. Whether a stop was too tight, whether a target left money behind, what a
-     * different exit policy would have returned — all of them replay the bars, and none of them can
-     * be answered from a position row. At roughly 25MB a session, ninety days costs about two
-     * gigabytes and buys the only evidence there is.</p>
-     */
-    @EventListener(ApplicationReadyEvent.class)
-    @Transactional
-    public void prune() {
-        if (!enabled) return;
-        try {
-            long removed = repository.deleteByTradingDateBefore(
-                    clock.tradingDate().minusDays(retentionDays));
-            if (removed > 0) log.info("pruned {} bar(s) older than {} days", removed, retentionDays);
-        } catch (RuntimeException e) {
-            log.warn("could not prune old candles: {}", e.getMessage());
-        }
-    }
+    // Deletion of old sessions lives in CandleArchiver: a session leaves this table only after it
+    // has verifiably arrived in the archive. Nothing here deletes.
 }

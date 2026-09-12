@@ -256,6 +256,28 @@ systemctl list-timers equity-log-retention.timer     # next run
 journalctl -u equity-log-retention -n 3              # what the last run deleted
 ```
 
+### 2.6 Candle archive — sessions leave the database after seven days
+
+The 1-minute bars of every stock are kept in H2 so a restart resumes the session. Seven days
+after a session they are exported as gzipped CSV to S3 and deleted from the table — about 2 MB a
+day in S3 instead of 30 MB a day in the trading database. A session is deleted **only after** the
+upload is verified (row count checked before, object size checked after); if the archive fails the
+rows stay and are retried next morning. After 60 days of failure they are deleted regardless, with
+an ERROR — the disk matters more than the history.
+
+| | |
+|---|---|
+| Destination | `s3://equity-trading-artefacts-336419686598/candles/<year>/candles-m1-<date>.csv.gz` |
+| Selected by | `CANDLE_ARCHIVE_BUCKET` in `/etc/equity/environment` (unset = local `./data/candle-archive`) |
+| Permission | `EquityCandleArchiveWrite` on the instance role: `s3:PutObject` on `candles/*` only |
+| Runs | 3 min after start-up, then every 6 h, never 09:10–15:35 IST — so once each weekday morning |
+| Log line | `candle archive run: …` every run; `archived session <date>: …` per session |
+| CSV columns | `symbol,trading_date,start_time_utc,open,high,low,close,volume`, sorted by symbol then time |
+
+```bash
+aws s3 ls s3://equity-trading-artefacts-336419686598/candles/2026/ --profile equity-aws-trading
+```
+
 ## 3. Adding a user
 
 From the **Users** screen, as an administrator:

@@ -99,6 +99,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>ec2</artifactId>
         </dependency>
+        <!-- Candle archive: finished sessions leave the database as gzipped CSV in S3. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+        </dependency>
     </dependencies>
 
     <dependencyManagement>
