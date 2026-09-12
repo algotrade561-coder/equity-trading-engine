@@ -49,7 +49,18 @@ public class KiteHttp {
     private final java.util.concurrent.ConcurrentMap<String, OkHttpClient> boundClients =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final ObjectMapper json = new ObjectMapper();
-    private final KiteRateLimiter limiter = new KiteRateLimiter(8);
+    /**
+     * One pacer per API key. Kite's limit is per key, so two users with their own keys have two
+     * budgets, and one user's polling must not slow another user's exit. Users sharing a key share
+     * a pacer, which is exactly the budget they share at the broker.
+     */
+    private final java.util.concurrent.ConcurrentMap<String, KiteRateLimiter> limiters =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private KiteRateLimiter limiterFor(KiteCredentials credentials) {
+        String key = credentials == null || credentials.apiKey() == null ? "" : credentials.apiKey();
+        return limiters.computeIfAbsent(key, k -> new KiteRateLimiter(8));
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public KiteHttp(KiteProperties properties) {
@@ -167,7 +178,7 @@ public class KiteHttp {
      * @param accessToken null for the login exchange, which is the one call made before a token exists
      */
     private JsonNode execute(Request.Builder builder, KiteCredentials credentials, String accessToken) {
-        limiter.acquire();
+        limiterFor(credentials).acquire();
 
         builder.header("X-Kite-Version", KITE_VERSION);
         if (accessToken != null && !accessToken.isBlank()) {

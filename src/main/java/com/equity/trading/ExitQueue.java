@@ -40,6 +40,28 @@ public class ExitQueue {
     }
 
     /** Everything queued, most urgent first. Draining is the caller's job. */
+    /**
+     * Everything queued for one user, most urgent first, removed from the queue.
+     *
+     * <p>Exits are sent on a thread per user, so each thread takes only its own user's requests. The
+     * remove is conditional on identity — a more urgent request that arrived after the snapshot
+     * stays queued rather than being lost with the one it superseded.</p>
+     */
+    public List<ExitRequest> drain(com.equity.domain.user.UserId userId) {
+        List<ExitRequest> mine = new ArrayList<>();
+        for (ExitRequest r : pending.values()) if (r.userId().equals(userId)) mine.add(r);
+        mine.sort(ExitRequest.BY_URGENCY);
+        mine.forEach(r -> pending.remove(r.positionId(), r));
+        return mine;
+    }
+
+    /** The users with at least one request waiting. What the periodic sweep re-signals. */
+    public java.util.Set<com.equity.domain.user.UserId> usersWithPending() {
+        java.util.Set<com.equity.domain.user.UserId> out = new java.util.HashSet<>();
+        for (ExitRequest r : pending.values()) out.add(r.userId());
+        return out;
+    }
+
     public List<ExitRequest> drain() {
         List<ExitRequest> all = new ArrayList<>(pending.values());
         all.sort(ExitRequest.BY_URGENCY);

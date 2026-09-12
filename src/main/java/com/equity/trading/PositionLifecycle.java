@@ -68,6 +68,32 @@ public class PositionLifecycle {
     private final ExitQueue exits = new ExitQueue();
 
     /**
+     * One monitor per user.
+     *
+     * <p>Every method that mutates positions used to be {@code synchronized} on this object, which
+     * was correct and simple while one user traded: a fill arriving on the order-update thread
+     * could not interleave with the entry that created the position. It is still correct with
+     * several users, but it serialises them — user B's entry waits for user A's broker round trip to
+     * finish, holding a lock that protects nothing they share. Positions never cross users, so the
+     * monitor is per user: exactly the same guarantee inside a user, no coupling between them.</p>
+     */
+    private final Map<UserId, Object> userLocks = new ConcurrentHashMap<>();
+
+    private Object lockFor(UserId userId) {
+        return userLocks.computeIfAbsent(userId, id -> new Object());
+    }
+
+    /**
+     * Told when an exit has been queued for a user, so a dispatcher can send it now rather than on
+     * the next sweep. Default no-op: the sweep still drains, so nothing depends on the signal.
+     */
+    private volatile java.util.function.Consumer<UserId> exitSignal = userId -> {};
+
+    public void onExitQueued(java.util.function.Consumer<UserId> listener) {
+        this.exitSignal = listener;
+    }
+
+    /**
      * What the other exit policies would have done to these same trades.
      *
      * <p>Owned here rather than injected because this class is the only thing that knows a position
@@ -178,8 +204,15 @@ public class PositionLifecycle {
      * @param epochAtDecision the epoch risk approved under; re-checked here because time passed
      * @return the new position, or empty if the entry was refused or failed
      */
-    public synchronized EntryOutcome open(UserAccount account, TradeIntent intent,
-                                          RiskDecision decision, long epochAtDecision) {
+    public EntryOutcome open(UserAccount account, TradeIntent intent,
+                             RiskDecision decision, long epochAtDecision) {
+        synchronized (lockFor(account.userId())) {
+            return openLocked(account, intent, decision, epochAtDecision);
+        }
+    }
+
+    private EntryOutcome openLocked(UserAccount account, TradeIntent intent,
+                                    RiskDecision decision, long epochAtDecision) {
         if (!decision.approved()) {
             return EntryOutcome.dropped("risk did not approve the entry");
         }
@@ -277,21 +310,28 @@ public class PositionLifecycle {
 
             // Both can be true when a bar gaps through the pair. The queue's priority ordering
             // resolves it in favour of the stop; raising both and letting it decide is deliberate.
+            boolean queued = false;
             if (position.stopBreached(tick.lastPrice())) {
-                exits.offer(ExitRequest.of(position, ExitReason.HARD_STOP, now,
+                queued |= exits.offer(ExitRequest.of(position, ExitReason.HARD_STOP, now,
                         String.format("%.2f through %.2f", tick.lastPrice(), position.stopPrice())));
             }
             if (position.targetReached(tick.lastPrice())) {
-                exits.offer(ExitRequest.of(position, ExitReason.TARGET, now,
+                queued |= exits.offer(ExitRequest.of(position, ExitReason.TARGET, now,
                         String.format("%.2f reached %.2f", tick.lastPrice(), position.targetPrice())));
             }
+            // The signal, not the send: this is the feed thread, and a broker call here would stall
+            // every instrument behind it. The dispatcher sends on this user's own thread, now,
+            // instead of whenever the one-second sweep next comes round.
+            if (queued) exitSignal.accept(position.userId());
         }
     }
 
     /** Raises an exit from any other source — structure breakdown, an operator, the square-off timer. */
     public void requestExit(Position position, ExitReason reason, String note) {
         if (!position.hasExposure()) return;
-        exits.offer(ExitRequest.of(position, reason, clock.now(), note));
+        if (exits.offer(ExitRequest.of(position, reason, clock.now(), note))) {
+            exitSignal.accept(position.userId());
+        }
     }
 
     /** Closes everything this user holds. Used by the halt path and the end-of-day square-off. */
@@ -318,8 +358,33 @@ public class PositionLifecycle {
      * be sent is the one situation where giving up silently is unacceptable: the position stays
      * open with nothing arranged to close it.</p>
      */
-    public synchronized int drainExits() {
-        List<ExitRequest> requests = exits.drain();
+    /** Users with at least one exit still queued. The dispatcher's sweep re-signals these. */
+    public java.util.Set<UserId> usersWithQueuedExits() {
+        return exits.usersWithPending();
+    }
+
+    /** Sends every queued exit, user by user. The tests use this form; production drains per user. */
+    public int drainExits() {
+        int sent = 0;
+        for (UserId userId : exits.usersWithPending()) sent += drainExits(userId);
+        return sent;
+    }
+
+    /**
+     * Sends one user's queued exits, most urgent first, under that user's lock.
+     *
+     * <p>Called on the user's dispatcher thread. Taking only this user's requests is what lets two
+     * users' stops leave at the same moment on two threads without either seeing the other's
+     * positions — and the per-position merge in {@link ExitQueue} is what still guarantees that a
+     * position raised by two reasons on two threads is sent exactly one order.</p>
+     */
+    public int drainExits(UserId userId) {
+        synchronized (lockFor(userId)) {
+            return drainLocked(exits.drain(userId));
+        }
+    }
+
+    private int drainLocked(List<ExitRequest> requests) {
         int sent = 0;
         for (ExitRequest request : requests) {
             Optional<Position> found = book.byId(request.positionId());
@@ -346,9 +411,10 @@ public class PositionLifecycle {
                 book.put(position.withExitPending(request.reason(), tag, orderId));
                 exitsSubmitted.incrementAndGet();
                 sent++;
-                log.info("EXIT {} {} x{} {} reason {} ({}) order {}",
+                log.info("EXIT {} {} x{} {} reason {} ({}) order {} — queued for {} ms",
                         position.userId(), position.symbol(), position.filledQuantity(),
-                        position.product(), request.reason(), request.note(), orderId);
+                        position.product(), request.reason(), request.note(), orderId,
+                        java.time.Duration.between(request.requestedAt(), clock.now()).toMillis());
             } catch (BrokerException e) {
                 log.error("EXIT FAILED for {} {} reason {}: {} — requeued",
                         position.userId(), position.symbol(), request.reason(), e.getMessage());
@@ -379,7 +445,14 @@ public class PositionLifecycle {
      *            having reached the exchange
      * @return the positions adopted
      */
-    public synchronized List<Position> resolveUnconfirmed(UserId userId, List<BrokerOrder> orders,
+    public List<Position> resolveUnconfirmed(UserId userId, List<BrokerOrder> orders,
+                                                          Duration age) {
+        synchronized (lockFor(userId)) {
+            return resolveUnconfirmedLocked(userId, orders, age);
+        }
+    }
+
+    private List<Position> resolveUnconfirmedLocked(UserId userId, List<BrokerOrder> orders,
                                                           Duration age) {
         if (unconfirmed.isEmpty()) return List.of();
         List<Position> adopted = new java.util.ArrayList<>();
@@ -440,7 +513,13 @@ public class PositionLifecycle {
      * this is not a disagreement to average out. The position is closed at the price the broker last
      * reported, and the reason says plainly that the engine did not do it.</p>
      */
-    public synchronized void adoptExternalClose(Position position, double price, String note) {
+    public void adoptExternalClose(Position position, double price, String note) {
+        synchronized (lockFor(position.userId())) {
+            adoptExternalCloseLocked(position, price, note);
+        }
+    }
+
+    private void adoptExternalCloseLocked(Position position, double price, String note) {
         if (!position.hasExposure()) return;
 
         // Falling back to the entry price books the trade at exactly zero, which is the one answer
@@ -476,7 +555,13 @@ public class PositionLifecycle {
      * is over, and this is the opposite — a position whose fate could not be established. Flattening
      * that into a clean close is how a real holding becomes invisible.</p>
      */
-    public synchronized void abandon(Position position, String note) {
+    public void abandon(Position position, String note) {
+        synchronized (lockFor(position.userId())) {
+            abandonLocked(position, note);
+        }
+    }
+
+    private void abandonLocked(Position position, String note) {
         if (position.status().isFinished()) return;
         book.put(position.withStatus(PositionStatus.ABANDONED, clock.now()));
         log.error("ABANDONED {} {} ({}) — {}. This needs a human: check the broker terminal.",
@@ -509,7 +594,13 @@ public class PositionLifecycle {
      * reconciliation pass, whereas a misapplied one corrupts two positions and hides a live holding.
      * So this refuses loudly and lets reconciliation do its job.</p>
      */
-    public synchronized void onOrderUpdate(UserId userId, BrokerOrder order, UserAccount account) {
+    public void onOrderUpdate(UserId userId, BrokerOrder order, UserAccount account) {
+        synchronized (lockFor(userId)) {
+            onOrderUpdateLocked(userId, order, account);
+        }
+    }
+
+    private void onOrderUpdateLocked(UserId userId, BrokerOrder order, UserAccount account) {
         Optional<Position> match = book.forUser(userId).stream()
                 .filter(p -> matchesTag(p, order.tag()))
                 .findFirst();

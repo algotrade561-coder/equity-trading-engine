@@ -26,6 +26,7 @@ import com.equity.strategy.MomentumStrategy;
 import com.equity.strategy.DecisionJournal;
 import com.equity.strategy.RejectionLog;
 import com.equity.strategy.StrategySignal;
+import com.equity.trading.OrderDispatcher;
 import com.equity.trading.PositionBook;
 import com.equity.trading.Reconciler;
 import com.equity.trading.PositionLifecycle;
@@ -94,6 +95,7 @@ public class SessionOrchestrator {
     private final SessionBackfill backfill;
     private final PositionBook positions;
     private final PositionLifecycle lifecycle;
+    private final OrderDispatcher dispatcher;
     private final UserRegistry users;
     private final TradingClock clock;
 
@@ -112,7 +114,8 @@ public class SessionOrchestrator {
                                MarginCache margins, MarginRequirements requirements,
                                Reconciler reconciler, SessionBackfill backfill,
                                PositionBook positions,
-                               PositionLifecycle lifecycle, UserRegistry users, TradingClock clock) {
+                               PositionLifecycle lifecycle, OrderDispatcher dispatcher,
+                               UserRegistry users, TradingClock clock) {
         this.marketData = marketData;
         this.orderUpdates = orderUpdates;
         this.router = router;
@@ -133,6 +136,7 @@ public class SessionOrchestrator {
         this.backfill = backfill;
         this.positions = positions;
         this.lifecycle = lifecycle;
+        this.dispatcher = dispatcher;
         this.users = users;
         this.clock = clock;
     }
@@ -261,12 +265,19 @@ public class SessionOrchestrator {
             return;
         }
 
+        // Recorded before the hand-off, on this thread: the attempt counts from the decision, and
+        // a second signal for this user must see it before the first order has even left.
         ledger.recordAttempt(account.userId());
-        var outcome = lifecycle.open(account, signal.intent(), decision, epoch);
-        if (!outcome.succeeded()) {
-            // The broker's own words, not a guess at which of two things went wrong.
-            rejections.recordExecutionFailure(account.userId(), state.symbol(), outcome.message());
-        }
+        String symbol = state.symbol();
+        // The broker round trip happens on this user's own dispatcher thread. This thread — the
+        // feed — returns to the next tick at once, and another user's entry on the same tick does
+        // not queue behind this one.
+        dispatcher.submitEntry(account, signal.intent(), decision, epoch, outcome -> {
+            if (!outcome.succeeded()) {
+                // The broker's own words, not a guess at which of two things went wrong.
+                rejections.recordExecutionFailure(account.userId(), symbol, outcome.message());
+            }
+        });
     }
 
     // ── Candle path ──────────────────────────────────────────────────────────
@@ -328,15 +339,17 @@ public class SessionOrchestrator {
     // ── Scheduled work ───────────────────────────────────────────────────────
 
     /**
-     * The fast loop. Closes candles whose minute elapsed without a tick, and sends queued exits.
+     * The fast loop. Closes candles whose minute elapsed without a tick, and sweeps for exits.
      *
-     * <p>Exits are drained here rather than on the feed thread on purpose: placing an order is an
-     * HTTP call, and doing it inline would stall every other instrument behind it.</p>
+     * <p>Exits used to be sent from here, which put up to a second between a stop being crossed and
+     * the order leaving. They are now sent the moment they are queued, on the owning user's
+     * dispatcher thread; the sweep is the safety net that re-signals anything still queued.</p>
      */
     @Scheduled(fixedDelay = 1000)
     public void fastLoop() {
         router.closeStaleBuckets();
-        lifecycle.drainExits();
+        int resignalled = dispatcher.sweep();
+        if (resignalled > 0) log.warn("exit sweep found {} user(s) with exits still queued", resignalled);
         // Off the feed thread on purpose: a slow disk here would stall every instrument behind one
         // write, and Kite drops a client that falls behind.
         journal.flush();

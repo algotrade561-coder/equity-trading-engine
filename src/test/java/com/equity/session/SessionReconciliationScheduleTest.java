@@ -102,6 +102,7 @@ class SessionReconciliationScheduleTest {
                 mock(com.equity.session.SessionBackfill.class),
                 mock(com.equity.trading.PositionBook.class),
                 mock(com.equity.trading.PositionLifecycle.class),
+                mock(com.equity.trading.OrderDispatcher.class),
                 users,
                 mock(com.equity.platform.time.TradingClock.class));
     }

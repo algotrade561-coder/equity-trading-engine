@@ -94,10 +94,25 @@ public class MomentumStrategy {
      *
      * @param minutes completed 1m history for the symbol, oldest first
      */
+    /**
+     * A setup is touched from three threads: the feed thread evaluating it, the scheduler closing a
+     * stale candle, and — now that orders leave on per-user dispatcher threads — the dispatcher
+     * releasing it when an entry fails. Each public entry point takes the setup's own monitor for the
+     * whole evaluation, so a release cannot land between "read the state" and "act on it". The lock
+     * is per user and symbol, so it is never contended in practice; it exists for correctness, not
+     * for throughput.
+     */
     public StrategySignal onCandleClosed(UserAccount account, SharedInstrumentState state,
                                          List<Candle> minutes) {
-        StrategyThresholds t = account.thresholds();
         SetupState setup = setupFor(account.userId(), state.symbol());
+        synchronized (setup) {
+            return evaluateCandle(account, state, minutes, setup);
+        }
+    }
+
+    private StrategySignal evaluateCandle(UserAccount account, SharedInstrumentState state,
+                                          List<Candle> minutes, SetupState setup) {
+        StrategyThresholds t = account.thresholds();
         java.time.Instant now = clock.now();
 
         // History first. The mandatory conditions read VWAP, the EMAs and relative strength, and
@@ -293,6 +308,13 @@ public class MomentumStrategy {
      */
     public StrategySignal onTick(UserAccount account, SharedInstrumentState state, Tick tick) {
         SetupState setup = setupFor(account.userId(), state.symbol());
+        synchronized (setup) {
+            return evaluateTick(account, state, tick, setup);
+        }
+    }
+
+    private StrategySignal evaluateTick(UserAccount account, SharedInstrumentState state, Tick tick,
+                                        SetupState setup) {
         if (!setup.isArmed()) return StrategySignal.NOTHING;
 
         // Silence, not a rejection: this setup already produced an intent that went nowhere, and
@@ -397,7 +419,9 @@ public class MomentumStrategy {
     /** Called by the position lifecycle when a trade closes, so the symbol is not re-entered at once. */
     public void onPositionClosed(UserId userId, String symbol, Duration cooldown) {
         SetupState setup = setupFor(userId, symbol);
-        setup.invalidate(clock.now(), clock.now().plus(cooldown));
+        synchronized (setup) {
+            setup.invalidate(clock.now(), clock.now().plus(cooldown));
+        }
     }
 
     /**
@@ -408,7 +432,10 @@ public class MomentumStrategy {
      * and a shadow record that counts one setup a thousand times is worse than no record.</p>
      */
     public void onShadowIntent(UserId userId, String symbol, Duration cooldown) {
-        setupFor(userId, symbol).invalidate(clock.now(), clock.now().plus(cooldown));
+        SetupState setup = setupFor(userId, symbol);
+        synchronized (setup) {
+            setup.invalidate(clock.now(), clock.now().plus(cooldown));
+        }
     }
 
     /** Called when an entry attempt did not become a position, so the setup can be tried again. */
@@ -426,7 +453,10 @@ public class MomentumStrategy {
     public void onEntryAbandoned(UserId userId, String symbol, boolean forTheSession) {
         java.time.Instant now = clock.now();
         Duration holdOff = forTheSession ? REST_OF_SESSION : ENTRY_RETRY_HOLD_OFF;
-        setupFor(userId, symbol).holdOffUntil(now.plus(holdOff), now);
+        SetupState setup = setupFor(userId, symbol);
+        synchronized (setup) {
+            setup.holdOffUntil(now.plus(holdOff), now);
+        }
     }
 
     /**
@@ -439,7 +469,10 @@ public class MomentumStrategy {
      */
     public void onEntryDeferredForCapacity(UserId userId, String symbol) {
         java.time.Instant now = clock.now();
-        setupFor(userId, symbol).holdOffUntil(now.plus(REST_OF_SESSION), now, true);
+        SetupState setup = setupFor(userId, symbol);
+        synchronized (setup) {
+            setup.holdOffUntil(now.plus(REST_OF_SESSION), now, true);
+        }
     }
 
     /**
@@ -451,9 +484,12 @@ public class MomentumStrategy {
     public void onCapacityFreed(UserId userId) {
         String prefix = userId + "|";
         setups.forEach((key, setup) -> {
-            if (key.startsWith(prefix) && setup.releaseCapacityHold()) {
-                log.debug("released the capacity hold on {}", key.substring(prefix.length()));
+            if (!key.startsWith(prefix)) return;
+            boolean released;
+            synchronized (setup) {
+                released = setup.releaseCapacityHold();
             }
+            if (released) log.debug("released the capacity hold on {}", key.substring(prefix.length()));
         });
     }
 
