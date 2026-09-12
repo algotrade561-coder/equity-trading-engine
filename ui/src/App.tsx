@@ -8,6 +8,7 @@ import { Rejections } from './pages/Rejections'
 import { Universe } from './pages/Universe'
 import { Settings } from './pages/Settings'
 import { Users } from './pages/Users'
+import { Connectivity } from './pages/Connectivity'
 
 /**
  * The shell: sign-in gate, side navigation, and the one poll everything reads from.
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/universe',   label: 'Universe',   icon: '◎' },
   { to: '/settings',   label: 'Settings',   icon: '⚙' },
   { to: '/users',      label: 'Users',      icon: '⚇', adminOnly: true },
+  { to: '/connectivity', label: 'Connectivity', icon: '⇄', adminOnly: true },   // temporary
 ]
 
 export function App() {
@@ -115,6 +117,7 @@ export function App() {
             <Route path="/universe"   element={<Universe />} />
             <Route path="/settings"   element={<Settings />} />
             {me.admin && <Route path="/users" element={<Users meId={me.tradingUserId} />} />}
+            {me.admin && <Route path="/connectivity" element={<Connectivity />} />}
             <Route path="*"           element={<Navigate to="/" replace />} />
           </Routes>
         </div>
