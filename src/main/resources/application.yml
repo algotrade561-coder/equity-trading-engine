@@ -85,6 +85,32 @@ equity:
     exit-rank: 75          # demoted below it; the gap is hysteresis, not indecision
     sanity-band-percent: 25 # a day change beyond this reads as an unadjusted split, not a move
 
+  # ── Per-user source addresses on AWS ─────────────────────────────────────────
+  # SEBI registers each broker API key to one static public IP. With several users on one instance,
+  # each needs their own Elastic IP and their traffic has to leave from the private address it maps
+  # to. This automates the AWS half: assign a secondary private IP to the network interface, add it
+  # to the OS, allocate an Elastic IP, associate them, bind the user. Registering the public IP in
+  # the Kite developer console has no API and stays a manual, audited step.
+  #
+  # OFF by default, and it must stay off everywhere but the production instance: the first thing it
+  # does when on is allocate an Elastic IP, which is billed from the moment it exists. Off, every
+  # EC2 call is recorded rather than made and the admin screen still works.
+  #
+  # No AWS credentials are configured anywhere. On the instance the SDK uses the attached IAM role
+  # through IMDSv2 — temporary, rotated by AWS, never written down. The role needs eight EC2
+  # actions and nothing else; the policy is in docs/AWS-DEPLOYMENT.md.
+  provisioning:
+    enabled: ${PROVISIONING_ENABLED:false}
+    network-interface: ${PROVISIONING_NIC:ens5}     # eth0 on Amazon Linux 2, ens5 on AL2023
+    privilege-command: sudo                         # scoped in /etc/sudoers.d to `ip addr add|del`
+    elastic-ip-quota: 5                             # the account's regional limit; raise by ticket
+    # Read from IMDS on the instance. Pin them only to run the provisioning code off-box.
+    instance-id: ${PROVISIONING_INSTANCE_ID:}
+    eni-id: ${PROVISIONING_ENI_ID:}
+    subnet-cidr: ${PROVISIONING_SUBNET_CIDR:}
+    region: ${PROVISIONING_REGION:}
+    primary-private-ip: ${PROVISIONING_PRIMARY_IP:}
+
   auth:
     google:
       # Off by default so a fresh checkout starts. MUST be on before this is reachable beyond
