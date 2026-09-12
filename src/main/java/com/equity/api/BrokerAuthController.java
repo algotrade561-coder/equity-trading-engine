@@ -11,8 +11,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -76,7 +78,15 @@ public class BrokerAuthController {
     public Map<String, String> loginUrl(
             @RequestParam(value = "userId", required = false) String userId) {
         UserId id = userId == null || userId.isBlank() ? currentUser.require() : UserId.of(userId);
-        return Map.of("loginUrl", auth.buildLoginUrl(id));
+        try {
+            return Map.of("loginUrl", auth.buildLoginUrl(id));
+        } catch (IllegalStateException e) {
+            // A fresh database has no API key yet. That is a setup step, not a server fault, and the
+            // first thing anyone does on a new box is click this button before visiting Settings.
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "No Kite API key and secret are stored for this user yet — enter them on the "
+                            + "Settings page, then connect again.");
+        }
     }
 
     /**

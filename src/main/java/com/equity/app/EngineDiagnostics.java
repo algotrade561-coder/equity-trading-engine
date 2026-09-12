@@ -191,7 +191,11 @@ public class EngineDiagnostics {
         long ticks = router.ticksSeen();
         long perMinute = ticks - lastTickCount.getAndSet(ticks);
         LocalTime now = clock.timeOfDay();
-        boolean marketHours = !now.isBefore(OPEN) && !now.isAfter(CLOSE);
+        java.time.DayOfWeek day = clock.tradingDate().getDayOfWeek();
+        boolean weekend = day == java.time.DayOfWeek.SATURDAY || day == java.time.DayOfWeek.SUNDAY;
+        // Exchange holidays are not known here, so a holiday still reads as market hours; a weekend
+        // at least does not — a Saturday labelled MARKET-HOURS with zero ticks looks like an outage.
+        boolean marketHours = !weekend && !now.isBefore(OPEN) && !now.isAfter(CLOSE);
 
         long armed = users.armed().size();
         long open = positions.all().stream().filter(p -> p.hasExposure()).count();
@@ -206,7 +210,7 @@ public class EngineDiagnostics {
                         + "ticks {} (+{}/min, {} dropped) | users {}/{} armed | "
                         + "positions {} open, {} pending | entries {} exits {} | "
                         + "intents {} shadow {} rejections {}",
-                now.withNano(0), marketHours ? "MARKET-HOURS" : "outside-hours",
+                now.withNano(0), marketHours ? "MARKET-HOURS" : weekend ? "weekend" : "outside-hours",
                 session.isFeedUp() ? "UP" : "DOWN",
                 tickers.isConnected() ? "CONNECTED" : "no session",
                 subscribed, ticking, universe.fullModeCount(),
