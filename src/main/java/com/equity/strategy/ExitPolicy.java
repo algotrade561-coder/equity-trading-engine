@@ -65,5 +65,14 @@ public record ExitPolicy(
         return new ExitPolicy(true, 1.0, true, 1.0, 1.5, true);
     }
 
+    /**
+     * What a new user starts with. The first live account runs the fixed policy and measures the
+     * alternatives as shadows, so that is the default: a new user's live exits are the ones with a
+     * record, and the shadow comparison keeps running for them too.
+     */
+    public static ExitPolicy house() {
+        return fixed();
+    }
+
     public boolean movesTheStop() { return breakevenEnabled || trailingEnabled; }
 }

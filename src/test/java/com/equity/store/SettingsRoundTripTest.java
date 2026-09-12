@@ -91,18 +91,47 @@ class SettingsRoundTripTest {
     }
 
     @Test
-    void aUserWithNothingStoredGetsTheShippedDefaults() {
+    void aUserWithNothingStoredGetsTheHouseSettings() {
         UserAccount fresh = afterRestart(UserId.random());
 
-        assertThat(fresh.limits().riskPerTradeRupees())
-                .isEqualTo(RiskLimits.conservative().riskPerTradeRupees());
+        assertThat(fresh.limits()).isEqualTo(RiskLimits.house());
+        assertThat(fresh.thresholds()).isEqualTo(StrategyThresholds.house());
         assertThat(fresh.exitPolicy())
-                .as("breakeven at 1R ships on; everything else after entry stays off")
-                .isEqualTo(ExitPolicy.breakevenAtOneR());
+                .as("the live account runs the fixed policy and measures the rest as shadows")
+                .isEqualTo(ExitPolicy.house());
     }
 
     /**
-     * The shipped exit policy, and the reasoning behind each half of it.
+     * The house settings are a copy of the first live account's row as it stood on 10 September
+     * 2026. Pinned here so that a change to either side is made knowingly: these nine are where the
+     * live account departed from the shipped defaults, and each departure was paid for in sessions.
+     */
+    @Test
+    void theHouseSettingsAreTheFirstLiveAccountsRow() {
+        RiskLimits risk = RiskLimits.house();
+        assertThat(risk.riskPerTradeRupees()).isEqualTo(3_000);
+        assertThat(risk.maxDailyLossRupees()).isEqualTo(10_000);
+        assertThat(risk.maxDailyAttempts()).isEqualTo(20);
+        assertThat(risk.maxPositionValue()).isEqualTo(200_000);
+
+        StrategyThresholds t = StrategyThresholds.house();
+        assertThat(t.minDayChangePercent()).isEqualTo(0.75);
+        assertThat(t.stopAtrMultiple()).isEqualTo(2.25);
+        assertThat(t.targetRMultiple()).isEqualTo(1.33);
+        assertThat(t.timeStopMinutes()).isEqualTo(90);
+
+        assertThat(ExitPolicy.house().breakevenEnabled()).isFalse();
+
+        // Everything else is unchanged from the shipped defaults.
+        assertThat(risk.maxOpenPositions()).isEqualTo(RiskLimits.conservative().maxOpenPositions());
+        assertThat(risk.minStopPercent()).isEqualTo(RiskLimits.conservative().minStopPercent());
+        assertThat(t.maxDayChangePercent()).isEqualTo(StrategyThresholds.defaults().maxDayChangePercent());
+        assertThat(t.squareOffTime()).isEqualTo(StrategyThresholds.defaults().squareOffTime());
+    }
+
+    /**
+     * The breakeven policy, and the reasoning behind each half of it. It was the default for a
+     * while; the live account has since gone back to the fixed policy and runs this one as a shadow.
      *
      * <p>It shipped with everything off because nothing had been measured. The first session that
      * traded measured it: ten closed positions gave back Rs 9,616 between their peak and their exit,
@@ -115,7 +144,7 @@ class SettingsRoundTripTest {
      * it had not already given back, and it cannot act until the trade has paid for its own risk.</p>
      */
     @Test
-    void theShippedPolicyMovesTheStopToEntryButNeverChasesPrice() {
+    void breakevenAtOneRMovesTheStopToEntryButNeverChasesPrice() {
         ExitPolicy shipped = ExitPolicy.breakevenAtOneR();
 
         assertThat(shipped.breakevenEnabled()).isTrue();

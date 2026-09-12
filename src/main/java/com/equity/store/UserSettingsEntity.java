@@ -83,12 +83,13 @@ public class UserSettingsEntity {
 
     protected UserSettingsEntity() {}
 
+    /** The row a user gets on first sight: the house settings, which are the ones that have traded. */
     public static UserSettingsEntity defaults(String tradingUserId) {
         UserSettingsEntity e = new UserSettingsEntity();
         e.tradingUserId = tradingUserId;
-        e.apply(RiskLimits.conservative());
-        e.apply(StrategyThresholds.defaults());
-        e.apply(ExitPolicy.breakevenAtOneR());
+        e.apply(RiskLimits.house());
+        e.apply(StrategyThresholds.house());
+        e.apply(ExitPolicy.house());
         return e;
     }
 

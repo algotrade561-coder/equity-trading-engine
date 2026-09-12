@@ -140,7 +140,7 @@ public class PositionLifecycle {
      */
     private volatile java.util.function.ToDoubleFunction<String> atrSource = symbol -> Double.NaN;
     private volatile java.util.function.Function<UserId, ExitPolicy> exitPolicySource =
-            userId -> ExitPolicy.breakevenAtOneR();
+            userId -> ExitPolicy.house();
 
     public PositionLifecycle(BrokerPort broker, PositionBook book, TradingClock clock) {
         this.broker = broker;

@@ -52,4 +52,28 @@ public record RiskLimits(
                 300,        // 5 minute cooldown per symbol
                 15);        // last tick may be 15s old at entry
     }
+
+    /**
+     * What a new user starts with: the limits the first live account settled on after its first
+     * two weeks (as of 10 September 2026), which is the only calibration this engine has.
+     *
+     * <p>The four numbers that differ from {@link #conservative()} are all sized to that account's
+     * capital of two to three lakh — ₹3,000 a trade is about one per cent of it. They are not right
+     * for a smaller account, and the administrator creating a user is shown them for that reason;
+     * the default is a starting point that has traded, not a recommendation for every balance.</p>
+     */
+    public static RiskLimits house() {
+        return new RiskLimits(
+                3_000,      // risk per trade — ~1% of the calibrating account
+                10_000,     // daily loss latch — about three full stops
+                3,          // concurrent positions
+                20,         // entry attempts per day
+                2,          // pending entries
+                200_000,    // notional per position
+                0.25,       // min stop %
+                1.50,       // max stop %
+                0.20,       // max spread %
+                300,        // 5 minute cooldown per symbol
+                15);        // last tick may be 15s old at entry
+    }
 }

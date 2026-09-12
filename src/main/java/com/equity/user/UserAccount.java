@@ -36,7 +36,7 @@ public class UserAccount {
 
     private volatile RiskLimits limits;
     private volatile StrategyThresholds thresholds;
-    private volatile ExitPolicy exitPolicy = ExitPolicy.breakevenAtOneR();
+    private volatile ExitPolicy exitPolicy = ExitPolicy.house();
     private volatile boolean entriesEnabled;
     private volatile UserStatus status;
 

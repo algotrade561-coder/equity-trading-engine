@@ -88,6 +88,15 @@ public class AdminUserController {
                 "remaining", capacity.remaining(),
                 "elasticIpsInUse", capacity.elasticIpsInUse(),
                 "interfaceSlots", capacity.interfaceSlots()));
+        // What a new user inherits. Shown at creation because the risk numbers are sized to the
+        // calibrating account's capital, and the administrator should set them against the new
+        // user's balance rather than discover them after the first trade.
+        com.equity.domain.risk.RiskLimits house = com.equity.domain.risk.RiskLimits.house();
+        m.put("newUserDefaults", Map.of(
+                "riskPerTradeRupees", house.riskPerTradeRupees(),
+                "maxDailyLossRupees", house.maxDailyLossRupees(),
+                "maxPositionValue", house.maxPositionValue(),
+                "maxOpenPositions", house.maxOpenPositions()));
         return m;
     }
 

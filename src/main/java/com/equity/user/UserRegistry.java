@@ -60,8 +60,8 @@ public class UserRegistry {
     private UserAccount build(UserId userId, TradingUser user) {
         var stored = settingsSource.load(userId);
         UserAccount account = new UserAccount(user,
-                stored.map(SettingsSource.Loaded::limits).orElseGet(RiskLimits::conservative),
-                stored.map(SettingsSource.Loaded::thresholds).orElseGet(StrategyThresholds::defaults));
+                stored.map(SettingsSource.Loaded::limits).orElseGet(RiskLimits::house),
+                stored.map(SettingsSource.Loaded::thresholds).orElseGet(StrategyThresholds::house));
         stored.map(SettingsSource.Loaded::exitPolicy).ifPresent(account::setExitPolicy);
         return account;
     }

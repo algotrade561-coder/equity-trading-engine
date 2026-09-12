@@ -96,4 +96,42 @@ public record StrategyThresholds(
                 LocalTime.of(14, 30),
                 LocalTime.of(15, 10));
     }
+
+    /**
+     * What a new user starts with: the thresholds the first live account arrived at over its first
+     * live sessions (as of 10 September 2026). Four differ from {@link #defaults()}, each for a
+     * reason that was observed rather than reasoned:
+     * <ul>
+     *   <li>day change floor 0.75% not 1.5% — at 1.5% whole sessions produced no candidate;</li>
+     *   <li>stop at 2.25 ATR not 1.5 — the tighter stop was hit by ordinary noise on moves that
+     *       then went on to the target;</li>
+     *   <li>target 1.33R not 2R — with the wider stop, 2R was rarely reached inside the window;</li>
+     *   <li>time stop 90 minutes not 45 — continuation on this tape takes longer to resolve.</li>
+     * </ul>
+     * These are one account's fortnight, not a study. They are the default because they are the
+     * only settings here that have been through live sessions; {@link #defaults()} never has.
+     */
+    public static StrategyThresholds house() {
+        return new StrategyThresholds(
+                0.75,   // min day change %
+                3.5,    // max day change %
+                25.0,   // corporate-action sanity band %
+                1.5,    // max distance from day high %
+                0.6,    // min 5m impulse return %
+                1.3,    // min relative volume
+                true,   // above VWAP
+                true,   // ema9 > ema20
+                true,   // outperforming the index
+                0.2,    // min pullback %
+                1.2,    // max pullback %
+                0.8,    // max consolidation range %
+                3,      // min consolidation bars
+                0.05,   // trigger buffer %
+                2.25,   // stop = 2.25 x ATR
+                1.33,   // target = 1.33R
+                90,     // time stop, minutes
+                LocalTime.of(9, 30),
+                LocalTime.of(14, 30),
+                LocalTime.of(15, 10));
+    }
 }

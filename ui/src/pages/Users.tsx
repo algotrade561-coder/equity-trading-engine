@@ -47,6 +47,7 @@ interface UsersResponse {
   users: UserRow[]
   provisioningEnabled: boolean
   capacity: { allocated: number; quota: number; remaining: number; elasticIpsInUse: number; interfaceSlots: number }
+  newUserDefaults: { riskPerTradeRupees: number; maxDailyLossRupees: number; maxPositionValue: number; maxOpenPositions: number }
 }
 
 export function Users({ meId }: { meId?: string }) {
@@ -75,7 +76,7 @@ export function Users({ meId }: { meId?: string }) {
       {error && <div className="card bad"><div className="error">{error}</div></div>}
 
       <CapacityCard data={data} />
-      <CreateUserCard onCreated={load} />
+      <CreateUserCard onCreated={load} defaults={data.newUserDefaults} />
 
       <div className="card">
         <h3>Users</h3>
@@ -137,7 +138,7 @@ function CapacityCard({ data }: { data: UsersResponse }) {
 
 // ── Create ───────────────────────────────────────────────────────────────────
 
-function CreateUserCard({ onCreated }: { onCreated: () => void }) {
+function CreateUserCard({ onCreated, defaults }: { onCreated: () => void; defaults: UsersResponse['newUserDefaults'] }) {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
   const [role, setRole] = useState<'TRADER' | 'ADMIN'>('TRADER')
@@ -161,6 +162,13 @@ function CreateUserCard({ onCreated }: { onCreated: () => void }) {
       <h3>Add a user</h3>
       <p className="hint">
         The email is the allow-list entry — sign-in with any other Google account is refused.
+      </p>
+      <p className="note">
+        A new user starts on the house settings: risk <b>₹{defaults.riskPerTradeRupees.toLocaleString('en-IN')}</b> a
+        trade, daily loss latch <b>₹{defaults.maxDailyLossRupees.toLocaleString('en-IN')}</b>, up to{' '}
+        <b>₹{defaults.maxPositionValue.toLocaleString('en-IN')}</b> per position, {defaults.maxOpenPositions} open at once.
+        Those are sized for a two-to-three lakh account — set them against this user's actual capital on
+        their Settings page before they arm.
       </p>
       <div className="grid two">
         <div>
