@@ -89,8 +89,11 @@ public class KiteTickerManager implements MarketDataPort, OrderUpdatePort {
 
         clients.computeIfPresent(userId, (id, existing) -> { existing.stop(); return null; });
 
+        // The socket this user's postbacks arrive on must leave from the same address their REST
+        // calls do — it is the same API key, registered to the same public IP. A ticker opened from
+        // the default interface for a user whose key is pinned elsewhere is refused at the handshake.
         KiteTickerClient client = new KiteTickerClient(
-                userId, properties, http.client(), clock, instruments.symbolResolver(), new EventBridge());
+                userId, properties, http.clientFor(creds), clock, instruments.symbolResolver(), new EventBridge());
         clients.put(userId, client);
         client.start(creds.apiKey(), session.accessToken());
 
@@ -98,6 +101,32 @@ public class KiteTickerManager implements MarketDataPort, OrderUpdatePort {
             primary = userId;
             log.info("user={} is now the primary market-data connection", userId);
             replayDesiredSubscriptions();
+        }
+    }
+
+    /**
+     * Rebinds a user after their source address changed.
+     *
+     * <p>Two things hold the old address: the cached REST client, and the open ticker socket. Both
+     * are replaced here, together, because replacing one and not the other is worse than replacing
+     * neither — REST calls would leave from the new address while postbacks still arrived on a
+     * socket bound to the old one, and the broker would see a key speaking from two places.</p>
+     *
+     * <p>The ticker is only reopened if it was open. A user with no session gets no socket, exactly
+     * as before; the next {@link #connect} picks up the new address on its own.</p>
+     */
+    public synchronized void sourceIpChanged(UserId userId, String previousIp) {
+        http.forgetClientFor(previousIp);
+        if (clients.containsKey(userId)) {
+            log.warn("source IP changed for user={} while their ticker was open — reconnecting it "
+                    + "from the new address", userId);
+            disconnect(userId);
+            try {
+                connect(userId);
+            } catch (RuntimeException e) {
+                log.error("could not reopen the ticker for user={} from the new address: {}. "
+                        + "Their postbacks will not arrive until the next login.", userId, e.getMessage());
+            }
         }
     }
 

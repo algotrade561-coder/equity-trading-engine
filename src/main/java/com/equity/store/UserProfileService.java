@@ -50,7 +50,7 @@ public class UserProfileService {
     // ── Broker credentials ───────────────────────────────────────────────────
 
     /** The real API key and secret. Broker layer only. */
-    public record BrokerCredentials(String apiKey, String apiSecret) {}
+    public record BrokerCredentials(String apiKey, String apiSecret, String sourceIp) {}
 
     @Transactional(readOnly = true)
     public Optional<BrokerCredentials> brokerCredentials(UserId userId) {
@@ -64,7 +64,7 @@ public class UserProfileService {
                                 + "the encryption key has changed and they must be re-entered", userId);
                         return null;
                     }
-                    return new BrokerCredentials(key, secret);
+                    return new BrokerCredentials(key, secret, c.getSourceIp());
                 });
     }
 
@@ -109,7 +109,7 @@ public class UserProfileService {
     /** What a settings page is allowed to know: presence, not content. */
     public record BrokerConfigView(boolean apiKeySet, boolean apiSecretSet, String apiKeyHint,
                                    String brokerClientId, String tokenTradingDate,
-                                   boolean encryptionAvailable) {}
+                                   boolean encryptionAvailable, String sourceIp) {}
 
     @Transactional(readOnly = true)
     public BrokerConfigView describeBrokerConfig(UserId userId) {
@@ -122,8 +122,50 @@ public class UserProfileService {
                         hint(cipher.decrypt(c.getApiKeyEncrypted())),
                         c.getBrokerClientId(),
                         c.getTokenTradingDate() == null ? null : c.getTokenTradingDate().toString(),
-                        cipher.isConfigured()))
-                .orElse(new BrokerConfigView(false, false, null, null, null, cipher.isConfigured()));
+                        cipher.isConfigured(),
+                        c.getSourceIp()))
+                .orElse(new BrokerConfigView(false, false, null, null, null, cipher.isConfigured(), null));
+    }
+
+    /**
+     * Pins this user's broker traffic to a local address, or clears the pin.
+     *
+     * <p>Accepts an IP literal only, never a hostname. A hostname is resolved at bind time, on the
+     * broker call path, by whatever the resolver says that second — which is exactly the kind of
+     * silent indirection that ends with an order leaving from an address the broker has not
+     * registered. The operator has the address in front of them; they can type it.</p>
+     *
+     * @return the address that was set before, so the caller can drop any client bound to it
+     */
+    @Transactional
+    public String setSourceIp(UserId userId, String sourceIp) {
+        String cleaned = sourceIp == null || sourceIp.isBlank() ? null : sourceIp.trim();
+        if (cleaned != null && !isIpLiteral(cleaned)) {
+            throw new IllegalArgumentException("source IP must be an IPv4 or IPv6 address, not '"
+                    + cleaned + "'");
+        }
+        BrokerConfigEntity config = brokerConfigs.findByTradingUserId(userId.toString())
+                .orElseGet(() -> new BrokerConfigEntity(userId.toString()));
+        String previous = config.getSourceIp();
+        config.setSourceIp(cleaned);
+        brokerConfigs.save(config);
+        log.warn("source IP for user={} changed {} -> {}", userId,
+                previous == null ? "default" : previous, cleaned == null ? "default" : cleaned);
+        return previous;
+    }
+
+    /** Whether a string is an address literal — digits and dots, or hex and colons — rather than a name. */
+    static boolean isIpLiteral(String value) {
+        if (value.indexOf(':') >= 0) {
+            return value.matches("[0-9A-Fa-f:.]+");
+        }
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) return false;
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3 || !part.chars().allMatch(Character::isDigit)) return false;
+            if (Integer.parseInt(part) > 255) return false;
+        }
+        return true;
     }
 
     private static String hint(String value) {

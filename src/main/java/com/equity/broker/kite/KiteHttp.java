@@ -18,10 +18,20 @@ import org.springframework.stereotype.Component;
 /**
  * The single place that speaks HTTP to Kite.
  *
- * <p>It owns three things that must not be scattered: the {@code Authorization} header (so no call
- * site can build one from the wrong user's token), rate limiting, and the mapping from a Kite error
- * envelope to a {@link BrokerException}. Kite replies 200 with {@code {"status":"error"}} in some
- * paths and a 4xx in others, so status-code checking alone is not enough.</p>
+ * <p>It owns four things that must not be scattered: the {@code Authorization} header (so no call
+ * site can build one from the wrong user's token), rate limiting, the mapping from a Kite error
+ * envelope to a {@link BrokerException}, and — since several users may share one machine — the
+ * choice of <b>which local address a call leaves from</b>. Kite replies 200 with
+ * {@code {"status":"error"}} in some paths and a 4xx in others, so status-code checking alone is not
+ * enough.</p>
+ *
+ * <h2>One client per source address</h2>
+ * <p>SEBI's static-IP rule registers each API key to one public IP. A user whose key is registered to
+ * an Elastic IP has to have their calls leave from the private address that IP maps to, and a user
+ * without one uses the machine's default interface. The address rides on {@link KiteCredentials},
+ * so {@link #clientFor} can pick the right client on every call without any call site knowing the
+ * rule exists. Clients are cached per address: an OkHttp client owns a connection pool and a thread
+ * pool, and building one per request would leak both.</p>
  *
  * <p>No method here logs a token, and no exception message contains one.</p>
  */
@@ -30,8 +40,14 @@ public class KiteHttp {
 
     private static final String KITE_VERSION = "3";
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KiteHttp.class);
+
     private final KiteProperties properties;
+    /** The default-interface client — every call without a source address, which is most of them. */
     private final OkHttpClient client;
+    /** One client per bound source address, built on first use. See {@link #clientFor}. */
+    private final java.util.concurrent.ConcurrentMap<String, OkHttpClient> boundClients =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private final ObjectMapper json = new ObjectMapper();
     private final KiteRateLimiter limiter = new KiteRateLimiter(8);
 
@@ -49,7 +65,58 @@ public class KiteHttp {
         this.client = client;
     }
 
+    /** The default-interface client. Callers that know the user should prefer {@link #clientFor}. */
     OkHttpClient client() { return client; }
+
+    /**
+     * The client whose sockets leave from this user's source address.
+     *
+     * <p>The default client when no address is set, which keeps a single-user deployment exactly as
+     * it was. Otherwise a client sharing the default's timeouts but with every socket bound to the
+     * given address, built once and reused — the address is the cache key, so two users given the
+     * same address (which should not happen, but the broker would be the one to object) share a
+     * client rather than fight over one.</p>
+     *
+     * <p>An address that does not resolve is a configuration error and is treated as one: the call
+     * fails with a clear message naming the address, rather than quietly going out from the default
+     * interface — which would be an order leaving from an address the broker will refuse, and the
+     * refusal would arrive as an opaque broker error some distance from its cause.</p>
+     */
+    OkHttpClient clientFor(KiteCredentials credentials) {
+        if (credentials == null || !credentials.hasSourceIp()) return client;
+        return boundClients.computeIfAbsent(credentials.sourceIp(), this::bindTo);
+    }
+
+    private OkHttpClient bindTo(String sourceIp) {
+        java.net.InetAddress address;
+        try {
+            address = java.net.InetAddress.getByName(sourceIp);
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalStateException("source IP '" + sourceIp + "' is not a valid address "
+                    + "— fix it on the user's broker settings before their calls can leave the box", e);
+        }
+        log.info("binding a Kite client to source address {} — this user's API key is registered "
+                + "to the public IP that address maps to, and calls from anywhere else are refused", sourceIp);
+        return client.newBuilder()
+                .socketFactory(new BoundSocketFactory(address))
+                .build();
+    }
+
+    /**
+     * Forgets the client bound to an address, so the next call rebuilds it.
+     *
+     * <p>Called when a user's source address changes. Without it the old client, and its pooled
+     * connections from the old address, would keep serving that user until restart — the exact
+     * failure the reference design records as its first bug.</p>
+     */
+    void forgetClientFor(String sourceIp) {
+        if (sourceIp == null) return;
+        OkHttpClient old = boundClients.remove(sourceIp);
+        if (old != null) {
+            old.connectionPool().evictAll();
+            log.info("dropped the Kite client bound to {}; the next call will rebuild it", sourceIp);
+        }
+    }
 
     public JsonNode get(String path, KiteCredentials credentials, String accessToken) {
         return execute(new Request.Builder().url(url(path)).get(), credentials, accessToken);
@@ -108,7 +175,7 @@ public class KiteHttp {
         }
 
         Request request = builder.build();
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = clientFor(credentials).newCall(request).execute()) {
             ResponseBody rb = response.body();
             String text = rb == null ? "" : rb.string();
             JsonNode root = text.isBlank() ? json.createObjectNode() : json.readTree(text);

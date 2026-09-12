@@ -24,6 +24,6 @@ public class StoredKiteCredentials implements KiteCredentialsProvider.StoredCred
     @Override
     public Optional<KiteCredentials> find(UserId userId) {
         return profiles.brokerCredentials(userId)
-                .map(c -> new KiteCredentials(c.apiKey(), c.apiSecret()));
+                .map(c -> new KiteCredentials(c.apiKey(), c.apiSecret(), c.sourceIp()));
     }
 }

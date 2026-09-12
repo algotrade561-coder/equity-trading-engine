@@ -53,6 +53,17 @@ public class BrokerConfigEntity {
     @Column(name = "token_trading_date")
     private LocalDate tokenTradingDate;
 
+    /**
+     * The local address this user's broker traffic must leave from, or null for the default.
+     *
+     * <p>On AWS this is a secondary private IP on the instance's network interface, mapped to an
+     * Elastic IP that the user has registered with the broker. Plain text: it is not a secret, it is
+     * the one value an operator has to read off the screen and type into the Kite developer console.
+     * Validated as an address at the API, not here — an entity should not refuse to load a row.</p>
+     */
+    @Column(name = "source_ip", length = 45)
+    private String sourceIp;
+
     private Instant tokenIssuedAt;
     private Instant updatedAt;
 
@@ -71,12 +82,14 @@ public class BrokerConfigEntity {
     public String getApiSecretEncrypted()     { return apiSecretEncrypted; }
     public String getAccessTokenEncrypted()   { return accessTokenEncrypted; }
     public LocalDate getTokenTradingDate()    { return tokenTradingDate; }
+    public String getSourceIp()               { return sourceIp; }
     public Instant getTokenIssuedAt()         { return tokenIssuedAt; }
     public Instant getUpdatedAt()             { return updatedAt; }
 
     public void setBrokerClientId(String v)       { this.brokerClientId = v; touch(); }
     public void setApiKeyEncrypted(String v)      { this.apiKeyEncrypted = v; touch(); }
     public void setApiSecretEncrypted(String v)   { this.apiSecretEncrypted = v; touch(); }
+    public void setSourceIp(String v)             { this.sourceIp = v == null || v.isBlank() ? null : v.trim(); touch(); }
 
     public void setSession(String accessTokenEncrypted, LocalDate tradingDate, Instant issuedAt) {
         this.accessTokenEncrypted = accessTokenEncrypted;
