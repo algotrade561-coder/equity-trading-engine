@@ -4,8 +4,38 @@
     {
       "name": "equity",
       "runtimeExecutable": "mvn",
-      "runtimeArgs": ["spring-boot:run"],
+      "runtimeArgs": [
+        "spring-boot:run"
+      ],
       "port": 8090
+    },
+    {
+      "name": "equity-sandbox",
+      "runtimeExecutable": "mvn",
+      "runtimeArgs": [
+        "-o",
+        "-q",
+        "spring-boot:run",
+        "-Dskip.ui=true",
+        "-Dspring-boot.run.arguments=--server.port=8091 --spring.datasource.url=jdbc:h2:mem:sandbox;MODE=PostgreSQL;DB_CLOSE_DELAY=-1 --spring.jpa.hibernate.ddl-auto=create --equity.broker.kite.enabled=false --equity.universe.auto-subscribe=false --equity.journal.enabled=false --equity.auth.google.enabled=false --logging.file.name=logs/sandbox.log"
+      ],
+      "port": 8091
+    },
+    {
+      "name": "ui-sandbox",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "ui",
+        "--",
+        "--port",
+        "5173",
+        "--mode",
+        "sandbox"
+      ],
+      "port": 5173
     }
   ]
 }

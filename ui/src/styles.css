@@ -170,7 +170,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #eafff2; }
 button.danger  { border-color: color-mix(in srgb, var(--bad) 55%, transparent); color: var(--bad); }
 
-input[type=text], input[type=password], input[type=number], input[type=time], select {
+input[type=text], input[type=email], input[type=password], input[type=number], input[type=time], select {
   width: 100%;
   padding: .5rem .6rem;
   font: 13px var(--mono);
@@ -185,6 +185,11 @@ input:focus-visible, button:focus-visible, select:focus-visible {
 label { display: block; font-size: .76rem; color: var(--ink-faint); margin-bottom: .3rem; }
 
 .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-end; }
+/* Table-cell actions: the same button, less of it. Full-size buttons wrapping inside a cell make a
+   row taller than the data it carries. */
+button.small { font-size: .74rem; padding: .28rem .55rem; }
+.actions { display: flex; gap: .3rem; flex-wrap: wrap; align-items: center; }
+.actions input[type=text] { width: 8.5em; padding: .28rem .45rem; font-size: 12px; }
 .grid { display: grid; gap: .9rem; }
 .grid.two   { grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .grid.three { grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }

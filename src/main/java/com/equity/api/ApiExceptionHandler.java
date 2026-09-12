@@ -17,9 +17,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * whether the server is broken or the request was. An operator debugging a trading engine at 09:20
  * should not have to read a stack trace to learn that a field was empty.</p>
  *
- * <p>Only {@link IllegalArgumentException} is mapped, deliberately. It is what the value types here
- * throw for input they cannot accept. Anything else genuinely is a server fault and keeps its 500,
+ * <p>Only {@link IllegalArgumentException} and a controller's own
+ * {@link org.springframework.web.server.ResponseStatusException} are mapped, deliberately. The first
+ * is what the value types here throw for input they cannot accept; the second is a controller
+ * choosing a status and saying why. Anything else genuinely is a server fault and keeps its 500,
  * because dressing an unexpected failure up as a client error is how real bugs get ignored.</p>
+ *
+ * <p>The second mapping exists because Spring's default body for a {@code ResponseStatusException}
+ * omits the reason unless {@code server.error.include-message} is turned on globally — and turning
+ * it on globally would also put stack-trace-adjacent detail from genuine 500s into API responses.
+ * Rendering it here keeps the reason for the errors a controller wrote on purpose, and nothing else.</p>
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -33,6 +40,14 @@ public class ApiExceptionHandler {
         body.put("message", describe(e));
         log.debug("rejected a request: {}", e.toString());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> withReason(org.springframework.web.server.ResponseStatusException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", e.getStatusCode().toString());
+        body.put("message", e.getReason() == null ? "request refused" : e.getReason());
+        return ResponseEntity.status(e.getStatusCode()).body(body);
     }
 
     /**

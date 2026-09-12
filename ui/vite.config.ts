@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const apiTarget = mode === 'sandbox' ? 'http://localhost:8091' : 'http://localhost:8090'
+  return {
   plugins: [react()],
   build: {
     // Into the SOURCE resources folder, not target/classes.
@@ -21,10 +23,13 @@ export default defineConfig({
     port: 5173,
     // `npm run dev` gives hot reload while still talking to the real engine on 8090. Without this
     // the dev server and the API are different origins and the session cookie is dropped.
+    // `--mode sandbox` points it at the 8091 sandbox instead, so a screen can be tried against a
+    // throwaway backend without the live engine ever seeing the request.
     proxy: {
-      '/api': 'http://localhost:8090',
-      '/oauth2': 'http://localhost:8090',
-      '/login': 'http://localhost:8090',
+      '/api': apiTarget,
+      '/oauth2': apiTarget,
+      '/login': apiTarget,
     },
   },
+  }
 })

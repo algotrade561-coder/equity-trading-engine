@@ -75,5 +75,26 @@ public class CurrentUser {
         return account().map(AppUserEntity::isAdmin).orElse(false);
     }
 
+    /**
+     * The caller's identity, on condition that they administer this engine.
+     *
+     * <p>A 403, not a 401: the caller is known, they are simply not allowed. Conflating the two sends
+     * an ordinary trader to the sign-in page for clicking the wrong link, which reads as a broken
+     * session rather than a closed door.</p>
+     */
+    public UserId requireAdmin() {
+        AppUserEntity account = account().orElseThrow(() -> new IllegalStateException("no signed-in user"));
+        if (!account.isAdmin()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "administrators only");
+        }
+        return UserId.of(account.getTradingUserId());
+    }
+
+    /** The signed-in account's email, for audit columns. "local" when sign-in is off. */
+    public String actor() {
+        return account().map(AppUserEntity::getEmail).orElse("anonymous");
+    }
+
     public boolean isAuthEnabled() { return authEnabled; }
 }
