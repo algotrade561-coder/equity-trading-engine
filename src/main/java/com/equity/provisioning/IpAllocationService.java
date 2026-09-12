@@ -238,18 +238,52 @@ public class IpAllocationService {
     /**
      * How many more users can be given an address before something has to be raised.
      *
-     * <p>Two limits apply and the smaller wins. The Elastic IP quota is an account-level number
-     * (five by default, raised by a support ticket). The interface limit is per instance type —
-     * a t3.medium holds six addresses per interface, one of which is the primary — and the only
-     * way past it is a bigger instance or a second interface.</p>
+     * <p>Two limits apply and the smaller wins, and both are measured against what AWS actually
+     * holds rather than against this table alone:</p>
+     * <ul>
+     *   <li>The Elastic IP quota is account-wide. The instance's own address counts against it,
+     *       and so would anything allocated by hand, so the number in use comes from
+     *       {@code DescribeAddresses}, not from the rows here.</li>
+     *   <li>The interface holds a fixed number of addresses for the instance type, primary
+     *       included. A t3.small holds four, so three users; the only way past it is a bigger
+     *       instance or a second interface.</li>
+     * </ul>
+     *
+     * <p>Getting this wrong is not cosmetic. Advertising five free slots on a box that has three
+     * means the fourth click fails at AWS after the private address was already assigned — the
+     * compensation unwinds it, but the administrator learns the limit from an error instead of
+     * from the screen. If the describe call itself fails, the count falls back to the rows, which
+     * can only over-estimate; the provisioning call still fails safely at the real limit.</p>
      */
     public Capacity capacity() {
         int live = store.live().size();
-        int eipRemaining = Math.max(0, properties.getElasticIpQuota() - live);
-        return new Capacity(live, properties.getElasticIpQuota(), eipRemaining);
+        int limit = properties.getInterfaceAddressLimit();
+
+        int eipsInUse;
+        try {
+            eipsInUse = Math.max(live, ec2.describeAddresses().size());
+        } catch (RuntimeException e) {
+            log.warn("could not count Elastic IPs in use ({}); showing capacity from the rows alone", e.toString());
+            eipsInUse = live;
+        }
+        int eipRemaining = Math.max(0, properties.getElasticIpQuota() - eipsInUse);
+
+        // The primary occupies one slot on the interface; the rest are for users.
+        int interfaceRemaining = Math.max(0, (limit - 1) - live);
+
+        return new Capacity(live, properties.getElasticIpQuota(), Math.min(eipRemaining, interfaceRemaining),
+                eipsInUse, limit - 1);
     }
 
-    public record Capacity(int allocated, int elasticIpQuota, int remaining) {}
+    /**
+     * @param allocated       addresses this table holds for users, automated or adopted
+     * @param elasticIpQuota  the account's regional Elastic IP limit
+     * @param remaining       users who can still be given an address — the smaller of the two limits
+     * @param elasticIpsInUse Elastic IPs the account holds in this region, the instance's own included
+     * @param interfaceSlots  user addresses the interface can hold (its limit less the primary)
+     */
+    public record Capacity(int allocated, int elasticIpQuota, int remaining,
+                           int elasticIpsInUse, int interfaceSlots) {}
 
     // ── Choosing an address ──────────────────────────────────────────────────
 

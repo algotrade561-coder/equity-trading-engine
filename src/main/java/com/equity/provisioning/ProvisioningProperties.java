@@ -32,6 +32,13 @@ public class ProvisioningProperties {
     /** The most Elastic IPs the account may hold in this region. The AWS default quota is 5. */
     private int elasticIpQuota = 5;
 
+    /**
+     * How many IPv4 addresses one network interface holds on this instance type, primary included.
+     * t3.micro and t3.small: 4. t3.medium: 6. t3.large: 12. The only ways past it are a bigger
+     * instance or a second interface, and neither is something this code does on its own.
+     */
+    private int interfaceAddressLimit = 4;
+
     private String instanceId;
     private String eniId;
     private String subnetCidr;
@@ -47,6 +54,8 @@ public class ProvisioningProperties {
     public void setPrivilegeCommand(String v) { this.privilegeCommand = v; }
     public int getElasticIpQuota() { return elasticIpQuota; }
     public void setElasticIpQuota(int v) { this.elasticIpQuota = v; }
+    public int getInterfaceAddressLimit() { return interfaceAddressLimit; }
+    public void setInterfaceAddressLimit(int v) { this.interfaceAddressLimit = v; }
     public String getInstanceId() { return instanceId; }
     public void setInstanceId(String v) { this.instanceId = v; }
     public String getEniId() { return eniId; }

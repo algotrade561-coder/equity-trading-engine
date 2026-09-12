@@ -85,7 +85,9 @@ public class AdminUserController {
         m.put("capacity", Map.of(
                 "allocated", capacity.allocated(),
                 "quota", capacity.elasticIpQuota(),
-                "remaining", capacity.remaining()));
+                "remaining", capacity.remaining(),
+                "elasticIpsInUse", capacity.elasticIpsInUse(),
+                "interfaceSlots", capacity.interfaceSlots()));
         return m;
     }
 

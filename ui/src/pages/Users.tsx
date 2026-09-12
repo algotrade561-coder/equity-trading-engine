@@ -46,7 +46,7 @@ interface UserRow {
 interface UsersResponse {
   users: UserRow[]
   provisioningEnabled: boolean
-  capacity: { allocated: number; quota: number; remaining: number }
+  capacity: { allocated: number; quota: number; remaining: number; elasticIpsInUse: number; interfaceSlots: number }
 }
 
 export function Users({ meId }: { meId?: string }) {
@@ -103,8 +103,9 @@ export function Users({ meId }: { meId?: string }) {
 // ── Capacity ─────────────────────────────────────────────────────────────────
 
 function CapacityCard({ data }: { data: UsersResponse }) {
-  const { allocated, quota, remaining } = data.capacity
+  const { allocated, quota, remaining, elasticIpsInUse, interfaceSlots } = data.capacity
   const tone = remaining === 0 ? 'bad' : remaining === 1 ? 'warn' : 'good'
+  const bound = interfaceSlots - allocated <= quota - elasticIpsInUse ? 'the instance type' : 'the Elastic IP quota'
   return (
     <div className="card">
       <h3>Addresses</h3>
@@ -115,15 +116,20 @@ function CapacityCard({ data }: { data: UsersResponse }) {
             ? <Pill tone="warn">LIVE — allocates Elastic IPs, which are billed</Pill>
             : <Pill>off — addresses are recorded, not created</Pill>}
         </dd>
+        <dt>User addresses</dt>
+        <dd><Pill tone={tone}>{allocated} assigned · {remaining} remaining</Pill></dd>
         <dt>Elastic IPs</dt>
-        <dd><Pill tone={tone}>{allocated} of {quota} used · {remaining} remaining</Pill></dd>
+        <dd>{elasticIpsInUse} of {quota} in the account (the instance's own is one of them)</dd>
+        <dt>Interface</dt>
+        <dd>{allocated} of {interfaceSlots} user slots on this instance type</dd>
       </dl>
       <p className="note">
         Each user's broker API key is registered to one public IP (SEBI static-IP rule). A user needs
-        their own Elastic IP, and their traffic leaves from the private address it maps to. The
-        account's quota is {quota}; raise it by AWS support ticket before it runs out. Registering the
-        public IP in the Kite developer console has no API — it is the last step, done by hand, and
-        the user cannot trade until it is ticked here.
+        their own Elastic IP, and their traffic leaves from the private address it maps to. Two limits
+        apply and the smaller wins — right now that is {bound}. The Elastic IP quota is raised by AWS
+        support ticket; the interface limit only by a bigger instance. Registering the public IP in
+        the Kite developer console has no API — it is the last step, done by hand, and the user cannot
+        trade until it is ticked here.
       </p>
     </div>
   )

@@ -107,6 +107,7 @@ equity:
     network-interface: ${PROVISIONING_NIC:ens5}     # eth0 on Amazon Linux 2, ens5 on AL2023
     privilege-command: sudo                         # scoped in /etc/sudoers.d to `ip addr add|del`
     elastic-ip-quota: 5                             # the account's regional limit; raise by ticket
+    interface-address-limit: ${PROVISIONING_IFACE_LIMIT:4}   # IPv4 per interface incl. primary: t3.small 4, t3.medium 6
     # Read from IMDS on the instance. Pin them only to run the provisioning code off-box.
     instance-id: ${PROVISIONING_INSTANCE_ID:}
     eni-id: ${PROVISIONING_ENI_ID:}

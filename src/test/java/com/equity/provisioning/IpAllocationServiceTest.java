@@ -263,7 +263,9 @@ class IpAllocationServiceTest {
         assertThat(adopted.isAutomated()).isFalse();
         assertThat(adopted.status()).isEqualTo(IpAllocationStatus.ACTIVE);
         assertThat(service.capacity().allocated()).isEqualTo(1);
-        assertThat(service.capacity().remaining()).isEqualTo(4);
+        assertThat(service.capacity().remaining())
+                .as("a t3.small interface holds four addresses: the primary, this one, and two more")
+                .isEqualTo(2);
         assertThat(bindings).containsExactly("bind " + USER + " 10.0.1.50");
     }
 
