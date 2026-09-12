@@ -1,0 +1,6 @@
+[Unit]
+Description=Delete equity logs older than ten days
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/equity-log-retention.sh

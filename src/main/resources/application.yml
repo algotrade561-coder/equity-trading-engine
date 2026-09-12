@@ -178,6 +178,10 @@ logging:
   logback:
     rollingpolicy:
       max-file-size: 20MB
-      max-history: 14
+      # Ten days of rolled files, and never more than half a gigabyte between them. Pruned on
+      # start-up as well as at rollover, so a box that was off over the weekend catches up.
+      max-history: 10
+      total-size-cap: 500MB
+      clean-history-on-start: true
   level:
     com.equity: INFO

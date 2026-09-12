@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily equity log retention
+
+[Timer]
+# 09:05 IST (03:35 UTC): the box is up on weekdays by then. Persistent runs a missed one at boot.
+OnCalendar=*-*-* 03:35:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

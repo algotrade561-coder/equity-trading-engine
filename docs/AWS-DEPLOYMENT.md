@@ -237,6 +237,25 @@ a restart mid-session is safe.
 
 ---
 
+### 2.5 Log retention — ten days
+
+Three places hold logs, each bounded on its own:
+
+| Where | What bounds it |
+|---|---|
+| `/opt/equity/logs/equity.log` | Logback: rolled daily, `max-history: 10`, `total-size-cap: 500MB`, pruned on start-up (`application.yml`) |
+| systemd journal (`journalctl -u equity`) | `/etc/systemd/journald.conf.d/equity.conf`: `MaxRetentionSec=10day`, `SystemMaxUse=300M` |
+| Anything Logback does not own | `equity-log-retention.timer`, daily 09:05 IST, runs `/usr/local/sbin/equity-log-retention.sh` |
+
+The files are in `deploy/`. `/opt/equity/data` is deliberately not touched: the database, the
+decision journal and stored candles are trade evidence with their own retention
+(`equity.candles.retention-days`), not logs.
+
+```bash
+systemctl list-timers equity-log-retention.timer     # next run
+journalctl -u equity-log-retention -n 3              # what the last run deleted
+```
+
 ## 3. Adding a user
 
 From the **Users** screen, as an administrator:
