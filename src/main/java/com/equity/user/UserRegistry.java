@@ -86,6 +86,14 @@ public class UserRegistry {
                         UserStatus.ACTIVE, Set.of(Role.TRADER))));
     }
 
+    /**
+     * Drops a user from the live registry. Only ever called after the store has refused to find any
+     * trading history for them — a user with positions is disabled, not forgotten.
+     */
+    public void forget(UserId userId) {
+        accounts.remove(userId);
+    }
+
     public Optional<UserAccount> find(UserId userId) {
         return Optional.ofNullable(accounts.get(userId));
     }

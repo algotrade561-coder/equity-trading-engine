@@ -11,4 +11,8 @@ public interface IpAllocationRepository extends JpaRepository<IpAllocationEntity
             String tradingUserId, IpAllocationStatus status);
 
     List<IpAllocationEntity> findByStatusNot(IpAllocationStatus status);
+
+    boolean existsByTradingUserId(String tradingUserId);
+
+    void deleteByTradingUserId(String tradingUserId);
 }

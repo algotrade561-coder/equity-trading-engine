@@ -30,6 +30,7 @@ public class UserProfileService {
     private static final Logger log = LoggerFactory.getLogger(UserProfileService.class);
 
     private final ConfigChangeRepository configChanges;
+    private final PositionRepository positions;
     private final com.equity.platform.time.TradingClock clock;
     private final AppUserRepository users;
     private final BrokerConfigRepository brokerConfigs;
@@ -38,11 +39,13 @@ public class UserProfileService {
 
     public UserProfileService(AppUserRepository users, BrokerConfigRepository brokerConfigs,
                               UserSettingsRepository settings, ConfigChangeRepository configChanges,
+                              PositionRepository positions,
                               com.equity.platform.time.TradingClock clock, SecretCipher cipher) {
         this.users = users;
         this.brokerConfigs = brokerConfigs;
         this.settings = settings;
         this.configChanges = configChanges;
+        this.positions = positions;
         this.clock = clock;
         this.cipher = cipher;
     }
@@ -152,6 +155,39 @@ public class UserProfileService {
         log.warn("source IP for user={} changed {} -> {}", userId,
                 previous == null ? "default" : previous, cleaned == null ? "default" : cleaned);
         return previous;
+    }
+
+    /** Whether the user currently holds, or is waiting on, a position. Deletion is refused while they do. */
+    @Transactional(readOnly = true)
+    public boolean hasExposure(UserId userId) {
+        return positions.existsByTradingUserIdAndStatusIn(userId.toString(),
+                java.util.List.of("PENDING_ENTRY", "OPEN", "EXIT_PENDING"));
+    }
+
+    /**
+     * Removes a user's account: their login, their settings, their broker configuration.
+     *
+     * <p>Their trading records are not touched. Positions, the daily ledger and the configuration
+     * audit are keyed by the trading id, not by the account row, and they stay exactly where they
+     * are — history a regulator can still ask for, now under an id with no login attached. What
+     * goes is the ability to sign in and everything that only exists to let them trade.</p>
+     *
+     * <p>Refused while the user holds a position. The exit machinery would still manage it, but
+     * nobody would be able to see it: the dashboard reads positions through the account. Close
+     * first, then delete.</p>
+     */
+    @Transactional
+    public String deleteAccount(UserId userId) {
+        String id = userId.toString();
+        if (hasExposure(userId)) {
+            throw new IllegalStateException("this user holds a position; close it before deleting them");
+        }
+        AppUserEntity account = users.findByTradingUserId(id)
+                .orElseThrow(() -> new IllegalStateException("no user " + id));
+        brokerConfigs.deleteByTradingUserId(id);
+        settings.deleteByTradingUserId(id);
+        users.delete(account);
+        return account.getEmail();
     }
 
     /** Whether a string is an address literal — digits and dots, or hex and colons — rather than a name. */

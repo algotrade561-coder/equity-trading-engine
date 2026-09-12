@@ -9,4 +9,6 @@ public interface BrokerConfigRepository extends JpaRepository<BrokerConfigEntity
     Optional<BrokerConfigEntity> findByTradingUserId(String tradingUserId);
 
     List<BrokerConfigEntity> findByTokenTradingDate(java.time.LocalDate tradingDate);
+
+    void deleteByTradingUserId(String tradingUserId);
 }

@@ -36,9 +36,13 @@ import org.springframework.web.server.ResponseStatusException;
  * shown as not ready, because the broker will refuse their orders however correct everything else
  * is.</p>
  *
- * <h2>What it will not do</h2>
- * <p>Delete a user. Their positions, ledger and audit rows refer to them, and a regulator can ask
- * about any of it. Disabling removes them from the allow-list and disarms them; the history stays.</p>
+ * <h2>Deleting</h2>
+ * <p>Removes the account — login, settings, broker configuration. The user's trading records stay:
+ * positions, ledger and audit rows are keyed by the trading id and are not touched, so history a
+ * regulator can ask for survives the account that made it. Three things are refused: deleting
+ * yourself, deleting a user who holds a position (close it first — the dashboard would lose sight of
+ * it), and deleting a user whose address is still allocated (release it first — an Elastic IP bound
+ * to nobody is a bill nobody is watching).</p>
  *
  * <p>Every endpoint requires ADMIN. Every change names who made it.</p>
  */
@@ -154,6 +158,37 @@ public class AdminUserController {
         return describe(user);
     }
 
+    /**
+     * Removes a user's account. See the class note for what stays and what is refused.
+     *
+     * <p>The live registry is dropped only after the store has agreed the user can go, because the
+     * store is what knows whether they hold a position.</p>
+     */
+    @DeleteMapping("/{tradingUserId}")
+    public Map<String, Object> delete(@PathVariable String tradingUserId) {
+        UserId admin = currentUser.requireAdmin();
+        AppUserEntity user = find(tradingUserId);
+        UserId id = UserId.of(tradingUserId);
+        if (admin.equals(id)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "you cannot delete your own account");
+        }
+        if (allocations.current(id).filter(IpAllocation::isLive).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "release this user's address first — deleting them would leave it bound to nobody");
+        }
+        String removed;
+        try {
+            removed = profiles.deleteAccount(id);
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+        registry.find(id).ifPresent(a -> a.setEntriesEnabled(false));
+        registry.forget(id);
+        log.warn("USER DELETED {} (trading id {}) by {} — account removed; trading records kept under the id",
+                removed, tradingUserId, currentUser.actor());
+        return Map.of("deleted", user.getEmail(), "tradingUserId", tradingUserId);
+    }
+
     // ── Addresses ────────────────────────────────────────────────────────────
 
     /** Runs the AWS sequence for this user. Refused unless provisioning is on. */
@@ -262,6 +297,7 @@ public class AdminUserController {
 
         // The one line the screen leads with: what is stopping this user trading, if anything.
         m.put("readiness", readiness(user, broker, address, live));
+        m.put("hasExposure", profiles.hasExposure(id));
         return m;
     }
 

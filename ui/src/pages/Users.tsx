@@ -40,6 +40,7 @@ interface UserRow {
   entriesArmed: boolean
   address: Address
   readiness: string
+  hasExposure: boolean
 }
 
 interface UsersResponse {
@@ -219,6 +220,17 @@ function UserLine({ user, isMe, busy, provisioning, act }: {
                   title={isMe ? 'You cannot change your own role' : undefined}
                   onClick={() => act(() => api.post(`/api/admin/users/${id}/role`, { role: user.role === 'ADMIN' ? 'TRADER' : 'ADMIN' }))}>
             {user.role === 'ADMIN' ? 'Make trader' : 'Make admin'}
+          </button>
+          <button className="small danger" disabled={busy || isMe || user.hasExposure || hasAddress}
+                  title={isMe ? 'You cannot delete yourself'
+                    : user.hasExposure ? 'Close their open position first'
+                    : hasAddress ? 'Release their address first'
+                    : 'Remove the account. Trading records are kept under the id.'}
+                  onClick={() => { if (confirm(`Delete ${user.email}?
+
+Their login, settings and broker credentials are removed. Positions and ledger history stay on record under their id.`))
+                    act(() => api.del(`/api/admin/users/${id}`)) }}>
+            Delete
           </button>
         </div>
       </td>
