@@ -117,6 +117,45 @@ class SessionCandleStoreTest {
         assertThat(candles.history("TCS", Timeframe.M1)).hasSize(25);
     }
 
+    /**
+     * The tick's day high is what the strategy's distance-from-high gate reads, and it routinely
+     * sits above anything the bars print. Captured when the bar closes, so a replay sees the same
+     * number the live engine did.
+     */
+    @Test
+    void aClosedBarIsStoredWithTheDayContextTheEngineHeldAtThatMoment() {
+        // Its own session, so the rows it writes are not counted by the other tests' restores.
+        Instant t0 = OPEN.plus(Duration.ofDays(1));
+        var clock = new FixedTradingClock(t0.plus(Duration.ofMinutes(2)));
+        CandleEngine candles = new CandleEngine();
+        StructureEngine structure = new StructureEngine(candles);
+        SessionCandleStore live = new SessionCandleStore(repository, candles, structure, clock, true);
+
+        // Two ticks in minute one, the exchange's day high already above anything printed, then a
+        // tick in minute two that closes the first bar.
+        structure.onTick(tick("HDFCBANK", 700.0, 100, 690.0, 698.0, 705.5, 697.0, t0));
+        candles.onTick(tick("HDFCBANK", 700.0, 100, 690.0, 698.0, 705.5, 697.0, t0));
+        structure.onTick(tick("HDFCBANK", 701.0, 200, 690.0, 698.0, 705.5, 697.0, t0.plusSeconds(30)));
+        candles.onTick(tick("HDFCBANK", 701.0, 200, 690.0, 698.0, 705.5, 697.0, t0.plusSeconds(30)));
+        structure.onTick(tick("HDFCBANK", 702.0, 300, 690.0, 698.0, 705.5, 697.0, t0.plusSeconds(60)));
+        candles.onTick(tick("HDFCBANK", 702.0, 300, 690.0, 698.0, 705.5, 697.0, t0.plusSeconds(60)));
+
+        live.flush();
+
+        var stored = repository.findByTradingDateOrderByStartTimeAsc(clock.tradingDate()).stream()
+                .filter(e -> e.symbol().equals("HDFCBANK")).findFirst().orElseThrow();
+        assertThat(stored.toCandle().high()).as("the bar itself prints only what was ticked").isEqualTo(701.0);
+        assertThat(stored.dayHigh()).as("but the exchange's day high is kept beside it").isEqualTo(705.5);
+        assertThat(stored.dayLow()).isEqualTo(697.0);
+        assertThat(stored.dayOpen()).isEqualTo(698.0);
+        assertThat(stored.previousClose()).isEqualTo(690.0);
+    }
+
+    private static com.equity.domain.market.Tick tick(String symbol, double last, long volume, double previousClose,
+                                                       double dayOpen, double dayHigh, double dayLow, Instant at) {
+        return new com.equity.domain.market.Tick(symbol, last, volume, 0, 0, dayOpen, dayHigh, dayLow, previousClose, at, at);
+    }
+
     @Test
     void aLiveBarIsNotOverwrittenByAStoredOneForTheSameMinute() {
         var clock = new FixedTradingClock(OPEN.plus(Duration.ofMinutes(40)));

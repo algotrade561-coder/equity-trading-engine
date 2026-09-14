@@ -59,7 +59,12 @@ public class CandleArchiver {
     private static final Logger log = LoggerFactory.getLogger(CandleArchiver.class);
     private static final LocalTime MARKET_QUIET_FROM = LocalTime.of(9, 10);
     private static final LocalTime MARKET_QUIET_UNTIL = LocalTime.of(15, 35);
-    static final String HEADER = "symbol,trading_date,start_time_utc,open,high,low,close,volume";
+    /**
+     * The last four columns are the day context at the bar's close and are blank for bars stored
+     * before it was captured (sessions up to 14 September 2026). Readers must accept both.
+     */
+    static final String HEADER = "symbol,trading_date,start_time_utc,open,high,low,close,volume,"
+            + "previous_close,day_open,day_high,day_low";
 
     private final CandleRepository repository;
     private final CandleArchive archive;
@@ -197,7 +202,11 @@ public class CandleArchiver {
                     out.write(Double.toString(r.getHigh())); out.write(',');
                     out.write(Double.toString(r.getLow())); out.write(',');
                     out.write(Double.toString(r.getClose())); out.write(',');
-                    out.write(Long.toString(r.getVolume()));
+                    out.write(Long.toString(r.getVolume())); out.write(',');
+                    out.write(optional(r.getPreviousClose())); out.write(',');
+                    out.write(optional(r.getDayOpen())); out.write(',');
+                    out.write(optional(r.getDayHigh())); out.write(',');
+                    out.write(optional(r.getDayLow()));
                     out.newLine();
                     count[0]++;
                 }
@@ -207,6 +216,10 @@ public class CandleArchiver {
         });
         if (failure[0] != null) throw failure[0];
         return count[0];
+    }
+
+    private static String optional(Double v) {
+        return v == null ? "" : Double.toString(v);
     }
 
     private void enforceHardLimit(LocalDate hardCutoff) {

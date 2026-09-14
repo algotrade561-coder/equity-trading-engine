@@ -138,9 +138,32 @@ class CandleArchiverTest {
         // Ordered by symbol then time, so a reader can walk one stock's day without sorting.
         assertThat(lines.get(1)).startsWith("RELIANCE," + old + ",");
         assertThat(lines.get(31)).startsWith("TCS," + old + ",");
-        // Every field, exactly as stored.
+        // Every field, exactly as stored; a bar recorded without day context has four blank columns.
         assertThat(lines.get(1)).isEqualTo("RELIANCE," + old + ","
-                + old.atTime(9, 15).atZone(IST).toInstant() + ",1000.0,1000.5,999.5,1000.25,1000");
+                + old.atTime(9, 15).atZone(IST).toInstant() + ",1000.0,1000.5,999.5,1000.25,1000,,,,");
+    }
+
+    /**
+     * The day context is the reason the archive is worth keeping: the strategy's day-change and
+     * distance-from-high gates read the exchange's figures off the tick, and a replay that does
+     * not have them cannot reproduce those gates.
+     */
+    @Test
+    void theDayContextAtTheBarsCloseIsArchivedWithIt() throws IOException {
+        LocalDate old = TODAY.minusDays(10);
+        Instant open = old.atTime(9, 15).atZone(IST).toInstant();
+        repository.save(new CandleEntity(new Candle("INFY", Timeframe.M1, open, 1500, 1505, 1499, 1503, 800), old,
+                new CandleEntity.DaySnapshot(1480.5, 1490, 1512.25, 1488)));
+        // Zeroes mean "not known" and must not be archived as prices.
+        repository.save(new CandleEntity(new Candle("TCS", Timeframe.M1, open, 3000, 3001, 2999, 3000, 10), old,
+                new CandleEntity.DaySnapshot(0, 0, 0, 0)));
+
+        archiver(7, 60).archiveNow();
+
+        List<String> lines = linesOf(archived(old));
+        assertThat(lines.get(0)).endsWith(",previous_close,day_open,day_high,day_low");
+        assertThat(lines.get(1)).isEqualTo("INFY," + old + "," + open + ",1500.0,1505.0,1499.0,1503.0,800,1480.5,1490.0,1512.25,1488.0");
+        assertThat(lines.get(2)).endsWith(",3000.0,10,,,,");
     }
 
     @Test

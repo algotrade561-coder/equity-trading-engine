@@ -272,7 +272,7 @@ an ERROR — the disk matters more than the history.
 | Permission | `EquityCandleArchiveWrite` on the instance role: `s3:PutObject` on `candles/*` only |
 | Runs | 3 min after start-up, then every 6 h, never 09:10–15:35 IST — so once each weekday morning |
 | Log line | `candle archive run: …` every run; `archived session <date>: …` per session |
-| CSV columns | `symbol,trading_date,start_time_utc,open,high,low,close,volume`, sorted by symbol then time |
+| CSV columns | `symbol,trading_date,start_time_utc,open,high,low,close,volume,previous_close,day_open,day_high,day_low`, sorted by symbol then time. The last four are the exchange's day figures as the engine held them when the bar closed — what the day-change and distance-from-high gates actually read — and are blank on bars stored before 15 Sep 2026. `tools/backtest/backtest.py` reads both forms. |
 
 ```bash
 aws s3 ls s3://equity-trading-artefacts-336419686598/candles/2026/ --profile equity-aws-trading

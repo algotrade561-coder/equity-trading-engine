@@ -18,10 +18,12 @@ application on purpose. Everything the engine decides is re-decided here from th
 
 What is simulated, not real: ticks (each bar becomes a path open -> extreme -> extreme -> close),
 fills (at the tick, 0.03% against you), the book (one-tick spread, so the spread gate passes), and
-the previous close (from a per-day file, else carried from the prior session's last bar). The
-exchange's day high is NOT known from bars — the live engine reads it off the tick and it can sit
-above anything the bars show — so "farFromDayHigh" is measured against the bars' own high. That is
-the largest known difference from live and it lets a few more setups through than live took.
+the previous close (from a per-day file, else carried from the prior session's last bar). Tapes
+archived from 15 September 2026 carry four extra columns — the exchange's previous close and the
+running day open/high/low as the engine held them when each bar closed — and those are used when
+present. Older tapes lack them: the day high is then the bars' own high, which sits below the
+exchange's, and "farFromDayHigh" lets through setups the live engine refused. That was the largest
+difference from live on the September 2026 sessions and it is why the columns were added.
 
 Usage:
     python tools/backtest/backtest.py --tape data/replay/tape --prev data/replay/previous-close \
@@ -76,6 +78,12 @@ class Bar:
     low: float
     close: float
     volume: int
+    # Day context at the bar's close, captured by the engine from the tick (archives from
+    # 15 September 2026 on). None on older tapes.
+    prev_close: Optional[float] = None
+    day_open: Optional[float] = None
+    day_high: Optional[float] = None
+    day_low: Optional[float] = None
 
 
 def load_tape(path: str) -> Dict[datetime, List[Bar]]:
@@ -87,10 +95,13 @@ def load_tape(path: str) -> Dict[datetime, List[Bar]]:
             raise SystemExit(f"{path}: not a candle archive ({header})")
         for line in f:
             p = line.rstrip("\n").split(",")
-            if len(p) != 8:
+            if len(p) not in (8, 12):
                 continue
             start = datetime.strptime(p[2], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-            by_minute[start].append(Bar(p[0], start, float(p[3]), float(p[4]), float(p[5]), float(p[6]), int(p[7])))
+            bar = Bar(p[0], start, float(p[3]), float(p[4]), float(p[5]), float(p[6]), int(p[7]))
+            if len(p) == 12:
+                bar.prev_close, bar.day_open, bar.day_high, bar.day_low = (float(x) if x else None for x in p[8:12])
+            by_minute[start].append(bar)
     return dict(sorted(by_minute.items()))
 
 
@@ -596,8 +607,10 @@ class Session:
             paths = []
             for b in bars:
                 i = self.inst[b.symbol]
+                if b.prev_close and self.args.use_captured:
+                    i.prev_close = b.prev_close          # the exchange's figure, as the engine saw it
                 if i.day_open == 0:
-                    i.day_open = b.open
+                    i.day_open = b.day_open if (b.day_open and self.args.use_captured) else b.open
                 up = b.close >= b.open
                 first, second = (b.low, b.high) if up else (b.high, b.low)
                 path = [b.open]
@@ -617,6 +630,13 @@ class Session:
                     self.on_tick(i, price)
             for i, b, path in paths:
                 i.bars.append(b)
+                if self.args.use_captured:
+                    # The exchange's running high/low as the engine held them when this bar closed —
+                    # applied at the close, which is when the engine's own reading reached them.
+                    if b.day_high:
+                        i.day_high = max(i.day_high, b.day_high)
+                    if b.day_low:
+                        i.day_low = b.day_low if i.day_low == 0 else min(i.day_low, b.day_low)
                 pending_close.append(i)
         self.advance(end_t, pending_close)
         self.advance(end_t + timedelta(minutes=2), [])
@@ -691,6 +711,8 @@ def main():
     ap.add_argument("--out", default="data/replay/py-out")
     ap.add_argument("--slippage", type=float, default=0.03, help="adverse slippage per fill, percent")
     ap.add_argument("--ticks-per-bar", type=int, default=10)
+    ap.add_argument("--no-captured", dest="use_captured", action="store_false",
+                    help="ignore the day context columns in the tape even when present")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)

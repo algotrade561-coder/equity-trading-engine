@@ -26,6 +26,11 @@ public interface CandleRepository extends JpaRepository<CandleEntity, Long> {
         double getLow();
         double getClose();
         long getVolume();
+        /** Day context at the bar's close; null on bars stored before it was captured. */
+        Double getPreviousClose();
+        Double getDayOpen();
+        Double getDayHigh();
+        Double getDayLow();
     }
 
     /**

@@ -56,7 +56,10 @@ public class SessionCandleStore {
     private final TradingClock clock;
     private final boolean enabled;
 
-    private final ConcurrentLinkedQueue<Candle> pending = new ConcurrentLinkedQueue<>();
+    /** A closed bar and the day context at the moment it closed. */
+    private record Recorded(Candle candle, CandleEntity.DaySnapshot day) {}
+
+    private final ConcurrentLinkedQueue<Recorded> pending = new ConcurrentLinkedQueue<>();
     private final AtomicInteger saved = new AtomicInteger();
     /**
      * Bars already on disk, as {@code symbol|epochSecond}.
@@ -89,8 +92,17 @@ public class SessionCandleStore {
     public int savedCount()    { return saved.get(); }
 
     /** Queued, never written here — this runs on the feed thread. */
+    /**
+     * Runs on the feed thread when a bar closes. The day snapshot is taken here and not at flush
+     * time: the flush is up to five seconds later, and the day high can have moved by then. It is
+     * one map read, which is all the feed thread can afford.
+     */
     private void record(Candle candle) {
-        if (candle.timeframe() == Timeframe.M1) pending.add(candle);
+        if (candle.timeframe() != Timeframe.M1) return;
+        CandleEntity.DaySnapshot day = structure.state(candle.symbol())
+                .map(s -> new CandleEntity.DaySnapshot(s.previousClose(), s.open(), s.dayHigh(), s.dayLow()))
+                .orElse(null);
+        pending.add(new Recorded(candle, day));
     }
 
     private static String key(String symbol, java.time.Instant startTime) {
@@ -168,10 +180,11 @@ public class SessionCandleStore {
         LocalDate today = clock.tradingDate();
 
         List<CandleEntity> batch = new ArrayList<>();
-        for (Candle c = pending.poll(); c != null && batch.size() < 5_000; c = pending.poll()) {
+        for (Recorded r = pending.poll(); r != null && batch.size() < 5_000; r = pending.poll()) {
+            Candle c = r.candle();
             // Filtered here rather than left to the constraint: a bar already stored is the normal
             // case after a restart, not an error worth a round trip to find out.
-            if (onDisk.add(key(c.symbol(), c.startTime()))) batch.add(new CandleEntity(c, today));
+            if (onDisk.add(key(c.symbol(), c.startTime()))) batch.add(new CandleEntity(c, today, r.day()));
         }
         if (batch.isEmpty()) return;
 
