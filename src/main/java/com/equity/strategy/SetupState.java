@@ -52,6 +52,16 @@ public class SetupState {
     private boolean mandatoryOk = true;
     private String mandatoryFailure = "";
 
+    // ── Descriptive only: what the run-up and the pause looked like, for the journal ──
+    // None of these is read by a decision. They exist so a trade can later be judged against the
+    // shape of the move it was taken on: whether the run-up was a grind or a single climactic bar,
+    // how long ago it started, and where the entry sat relative to the pause it broke out of.
+    private double climaxBarAtr;          // largest bar range in the run-up, in ATRs at the time
+    private double runUpPercent;          // run-up from its base to the impulse high, per cent
+    private Instant impulseStartedAt;
+    private double pauseHigh;             // set when armed: the level the trigger is built on
+    private double pauseLowAtArm;         // the pause low when armed (structureLow keeps ratcheting)
+
     public MomentumState state()        { return state; }
     public EntryPattern pattern()       { return pattern; }
     public double impulseHigh()         { return impulseHigh; }
@@ -64,6 +74,17 @@ public class SetupState {
     public Instant retriggerAfter()     { return retriggerAfter; }
     public boolean mandatoryOk()        { return mandatoryOk; }
     public String mandatoryFailure()    { return mandatoryFailure; }
+    public double climaxBarAtr()        { return climaxBarAtr; }
+    public double runUpPercent()        { return runUpPercent; }
+    public Instant impulseStartedAt()   { return impulseStartedAt; }
+    public double pauseHigh()           { return pauseHigh; }
+    public double pauseLowAtArm()       { return pauseLowAtArm; }
+
+    /** Recorded when an impulse begins or extends. Descriptive; nothing decides on it. */
+    public void describeRunUp(double climaxBarAtr, double runUpPercent) {
+        this.climaxBarAtr = climaxBarAtr;
+        this.runUpPercent = runUpPercent;
+    }
 
     /** Records the mandatory verdict from a candle close, for the tick path to honour. */
     public void recordMandatory(boolean ok, String failure) {
@@ -125,6 +146,7 @@ public class SetupState {
     public void beginImpulse(double high, Instant at) {
         this.impulseHigh = high;
         this.barsInPause = 0;
+        if (this.state != MomentumState.IMPULSE) this.impulseStartedAt = at;   // extending keeps the start
         moveTo(MomentumState.IMPULSE, at);
     }
 
@@ -144,7 +166,13 @@ public class SetupState {
     }
 
     public void arm(double triggerLevel, Instant at) {
+        arm(triggerLevel, 0, at);
+    }
+
+    public void arm(double triggerLevel, double pauseHigh, Instant at) {
         this.triggerLevel = triggerLevel;
+        this.pauseHigh = pauseHigh;
+        this.pauseLowAtArm = this.structureLow;
         moveTo(MomentumState.ARMED, at);
     }
 
@@ -157,6 +185,11 @@ public class SetupState {
         this.barsInPause = 0;
         this.barsSinceArmed = 0;
         this.pattern = null;
+        this.climaxBarAtr = 0;
+        this.runUpPercent = 0;
+        this.impulseStartedAt = null;
+        this.pauseHigh = 0;
+        this.pauseLowAtArm = 0;
         this.cooldownUntil = cooldownUntil;
         moveTo(MomentumState.IDLE, at);
     }

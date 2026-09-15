@@ -214,6 +214,30 @@ class MomentumStrategyTest {
         assertThat(setup.structureLow()).isGreaterThan(0.0);
     }
 
+    /**
+     * The shape of the move is remembered for the journal — and only for the journal. A setup that
+     * armed must be able to say what its run-up and pause looked like, and forgetting it all on
+     * invalidation is what keeps a stale description from being written against the next setup.
+     */
+    @Test
+    void anArmedSetupDescribesItsRunUpAndPauseAndForgetsThemWhenInvalidated() {
+        SetupState setup = arm();
+
+        assertThat(setup.impulseStartedAt()).as("when the impulse began").isNotNull();
+        assertThat(setup.runUpPercent()).as("how far the run-up travelled").isGreaterThan(0.0);
+        assertThat(setup.pauseHigh()).as("the level the trigger was built on").isEqualTo(1035.0);
+        assertThat(setup.pauseLowAtArm()).as("the pause low as it stood when armed").isEqualTo(setup.structureLow());
+        assertThat(setup.triggerLevel()).isGreaterThan(setup.pauseHigh());
+
+        strategy.onPositionClosed(account.userId(), SYMBOL, java.time.Duration.ofMinutes(5));
+
+        assertThat(setup.impulseStartedAt()).isNull();
+        assertThat(setup.pauseHigh()).isZero();
+        assertThat(setup.pauseLowAtArm()).isZero();
+        assertThat(setup.runUpPercent()).isZero();
+        assertThat(setup.climaxBarAtr()).isZero();
+    }
+
     @Test
     void aDeepRetracementInvalidatesRatherThanWaiting() {
         List<Candle> history = flatHistory(30, 1030);

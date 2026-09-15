@@ -232,6 +232,7 @@ public class MomentumStrategy {
         }
         double high = highOfLast(minutes, 5);
         setup.beginImpulse(high, now);
+        setup.describeRunUp(climaxBarAtr(minutes, 5, s.atr()), runUpPercent(minutes, 5));
         return StrategySignal.NOTHING;
     }
 
@@ -259,6 +260,8 @@ public class MomentumStrategy {
         }
         // Still extending. Carry the higher high forward rather than dropping the setup.
         setup.beginImpulse(impulseHigh, now);
+        setup.describeRunUp(Math.max(setup.climaxBarAtr(), climaxBarAtr(minutes, 5, s.atr())),
+                Math.max(setup.runUpPercent(), runUpPercent(minutes, 5)));
         return StrategySignal.NOTHING;
     }
 
@@ -283,7 +286,7 @@ public class MomentumStrategy {
         }
         double pauseHigh = highOfLast(minutes, setup.barsInPause());
         double trigger = pauseHigh * (1 + t.triggerBufferPercent() / 100.0);
-        setup.arm(trigger, now);
+        setup.arm(trigger, pauseHigh, now);
         return StrategySignal.NOTHING;
     }
 
@@ -508,6 +511,21 @@ public class MomentumStrategy {
     }
 
     /** Range of the last n bars as a percentage of their low. */
+    /**
+     * The tallest bar in the last {@code n}, in ATRs. Descriptive: a run-up made of one five-ATR
+     * bar and a run-up of five one-ATR bars pass the same impulse test and are different trades.
+     */
+    private static double climaxBarAtr(List<Candle> candles, int n, double atr) {
+        if (!(atr > 0) || Double.isNaN(atr)) return Double.NaN;
+        return lastN(candles, n).stream().mapToDouble(c -> c.high() - c.low()).max().orElse(0) / atr;
+    }
+
+    /** Low of the last {@code n} bars to their high, per cent — how far the run-up travelled. */
+    private static double runUpPercent(List<Candle> candles, int n) {
+        double low = lowOfLast(candles, n), high = highOfLast(candles, n);
+        return low > 0 ? (high - low) / low * 100.0 : Double.NaN;
+    }
+
     private static double rangeOfLast(List<Candle> candles, int n) {
         List<Candle> window = lastN(candles, n);
         if (window.size() < n) return Double.MAX_VALUE;

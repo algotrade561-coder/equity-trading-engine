@@ -489,6 +489,13 @@ class Session:
         if not (i.rvol >= T["min_rvol"]):
             self.rejections["volumeFadedByTrigger"] += 1
             return
+        # ── experimental extension gates (off unless set on the command line) ──
+        if self.args.max_vwap_ext is not None and i.vwap > 0 and (price - i.vwap) / price * 100.0 > self.args.max_vwap_ext:
+            self.rejections["tooFarAboveVwap(exp)"] += 1
+            return
+        if self.args.max_r15 is not None and not math.isnan(i.r15) and i.r15 > self.args.max_r15:
+            self.rejections["ran15mTooFast(exp)"] += 1
+            return
         entry = price
         stop = s.structure_low
         if not math.isnan(i.atr) and i.atr > 0:
@@ -711,6 +718,10 @@ def main():
     ap.add_argument("--out", default="data/replay/py-out")
     ap.add_argument("--slippage", type=float, default=0.03, help="adverse slippage per fill, percent")
     ap.add_argument("--ticks-per-bar", type=int, default=10)
+    ap.add_argument("--max-vwap-ext", type=float, default=None,
+                    help="experimental: refuse a trigger more than this %% above session VWAP")
+    ap.add_argument("--max-r15", type=float, default=None,
+                    help="experimental: refuse a trigger whose 15-minute return exceeds this %%")
     ap.add_argument("--no-captured", dest="use_captured", action="store_false",
                     help="ignore the day context columns in the tape even when present")
     args = ap.parse_args()

@@ -60,6 +60,11 @@ public class DecisionJournal {
     private final TradingClock clock;
     private final boolean enabled;
     private final Path directory;
+    /**
+     * Where the market is when each row is written. Optional so the journal can exist without it
+     * (tests, tools); when absent the market fields are simply omitted from every row.
+     */
+    private volatile java.util.function.Supplier<com.equity.market.state.MarketContext.Snapshot> market = null;
 
     private final ConcurrentLinkedQueue<String> pending = new ConcurrentLinkedQueue<>();
     private final AtomicInteger queued = new AtomicInteger();
@@ -73,6 +78,41 @@ public class DecisionJournal {
         this.clock = clock;
         this.enabled = enabled;
         this.directory = Path.of(directory);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DecisionJournal(TradingClock clock,
+                           @Value("${equity.journal.enabled:true}") boolean enabled,
+                           @Value("${equity.journal.directory:./data/journal}") String directory,
+                           com.equity.market.state.MarketContext marketContext) {
+        this(clock, enabled, directory);
+        this.market = marketContext::snapshot;
+    }
+
+    // ── Shadow gates ─────────────────────────────────────────────────────────
+    // Candidate entry filters, evaluated and RECORDED at every intent but never acted on. Each is a
+    // hypothesis from the September 2026 sessions about which entries fail; the journal accumulates
+    // the evidence that says whether any of them deserves to become a real gate. Thresholds are
+    // constants here on purpose: a shadow gate that can be tuned is a shadow gate nobody can read.
+    static final double SHADOW_MAX_CLIMAX_ATR = 3.0;     // run-up made of one bar taller than 3 ATR
+    static final double SHADOW_MAX_RET15M_PCT = 1.5;     // fifteen-minute return at the trigger
+    static final double SHADOW_MAX_VWAP_EXT_PCT = 1.6;   // distance above session VWAP at the trigger
+    static final double SHADOW_MIN_NIFTY_FROM_OPEN = -0.3;   // the index not already down on the day
+    static final double SHADOW_MIN_BREADTH_PCT = 40.0;       // at least this share of the universe green
+
+    private static String shadowGates(SharedInstrumentState s, SetupState setup,
+                                      com.equity.market.state.MarketContext.Snapshot m) {
+        boolean climaxOk = !(setup.climaxBarAtr() > SHADOW_MAX_CLIMAX_ATR);
+        boolean ret15Ok = !(s.return15m() > SHADOW_MAX_RET15M_PCT);
+        boolean vwapOk = !(s.distanceFromVwapPercent() > SHADOW_MAX_VWAP_EXT_PCT);
+        boolean marketOk = m != null
+                && !(m.indexChangeFromOpenPct() < SHADOW_MIN_NIFTY_FROM_OPEN)
+                && !(m.pctUpOnDay() < SHADOW_MIN_BREADTH_PCT);
+        return "\"shadowGates\":{\"climaxLe3Atr\":" + climaxOk
+                + ",\"ret15Le1_5\":" + ret15Ok
+                + ",\"vwapExtLe1_6\":" + vwapOk
+                + ",\"marketOk\":" + marketOk
+                + ",\"all\":" + (climaxOk && ret15Ok && vwapOk && marketOk) + "}";
     }
 
     // ── Recording ────────────────────────────────────────────────────────────
@@ -132,11 +172,17 @@ public class DecisionJournal {
         if (!enabled) return;
         com.equity.domain.market.BookState b =
                 book == null ? com.equity.domain.market.BookState.NONE : book;
+        com.equity.market.state.MarketContext.Snapshot m = market == null ? null : market.get();
+        double risk = entry - stop;
         offer(row("intent", userId, state, setup)
                 + ",\"entry\":" + num(entry)
                 + ",\"stop\":" + num(stop)
                 + ",\"target\":" + num(target)
-                + ",\"riskPerShare\":" + num(entry - stop)
+                + ",\"riskPerShare\":" + num(risk)
+                // Where the entry sits in the pause, in R: 0 would be an entry at the pause low.
+                // The counterfactual "enter inside the pause instead" is read off this later.
+                + ",\"entryAbovePauseLowR\":" + num(risk > 0 && setup.pauseLowAtArm() > 0 ? (entry - setup.pauseLowAtArm()) / risk : Double.NaN)
+                + "," + shadowGates(state, setup, m)
                 + ",\"userArmed\":" + armed
                 + ",\"bidQty\":" + b.bidQuantity()
                 + ",\"askQty\":" + b.askQuantity()
@@ -235,7 +281,29 @@ public class DecisionJournal {
                 + ",\"ret15m\":" + num(s.return15m())
                 + ",\"rvol\":" + num(s.relativeVolume())
                 + ",\"rs\":" + num(s.niftyRelativeStrength())
-                + ",\"rank\":" + s.currentGainerRank();
+                + ",\"rank\":" + s.currentGainerRank()
+                + setupShape(setup)
+                + marketFields();
+    }
+
+    /** What the run-up and pause looked like. Zeros while the setup is idle. */
+    private String setupShape(SetupState setup) {
+        if (setup == null) return "";
+        long sinceImpulse = setup.impulseStartedAt() == null ? -1
+                : java.time.Duration.between(setup.impulseStartedAt(), clock.now()).toMinutes();
+        return ",\"climaxBarAtr\":" + num(setup.climaxBarAtr())
+                + ",\"runUpPct\":" + num(setup.runUpPercent())
+                + ",\"minutesSinceImpulse\":" + sinceImpulse
+                + ",\"impulseHigh\":" + num(setup.impulseHigh())
+                + ",\"pauseHigh\":" + num(setup.pauseHigh())
+                + ",\"pauseLow\":" + num(setup.pauseLowAtArm() > 0 ? setup.pauseLowAtArm() : setup.structureLow())
+                + ",\"trigger\":" + num(setup.triggerLevel());
+    }
+
+    private String marketFields() {
+        if (market == null) return "";
+        com.equity.market.state.MarketContext.Snapshot m = market.get();
+        return m == null || m.at() == null ? "" : "," + m.toJsonFields();
     }
 
     private void offer(String line) {
