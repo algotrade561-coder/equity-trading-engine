@@ -244,6 +244,7 @@ class Setup:
     held_for_capacity: bool = False
     mandatory_ok: bool = True
     mandatory_failure: str = ""
+    climax_atr: float = 0.0
 
     def move_to(self, s):
         if self.state != s:
@@ -253,6 +254,7 @@ class Setup:
 
     def invalidate(self, now: datetime, cooldown: timedelta):
         self.impulse_high = self.structure_low = self.trigger = 0.0
+        self.climax_atr = 0.0
         self.bars_in_pause = self.bars_since_armed = 0
         self.pattern = None
         self.cooldown_until = now + cooldown
@@ -422,6 +424,7 @@ class Session:
         if not (i.rvol >= T["min_rvol"]):
             raise Rejection("IMPULSE", "noVolumeBehindThrust")
         s.impulse_high, s.bars_in_pause = high_of_last(i.bars, 5), 0
+        s.climax_atr = (max(b.high - b.low for b in i.bars[-5:]) / i.atr) if i.atr and i.atr > 0 else 0.0
         s.move_to("IMPULSE")
 
     def try_pause(self, i: Inst, s: Setup):
@@ -441,6 +444,8 @@ class Session:
             s.move_to("PULLBACK")
             return
         s.impulse_high, s.bars_in_pause = impulse_high, 0
+        if i.atr and i.atr > 0:
+            s.climax_atr = max(s.climax_atr, max(b.high - b.low for b in i.bars[-5:]) / i.atr)
         s.move_to("IMPULSE")
 
     def try_arm(self, i: Inst, s: Setup):
@@ -496,6 +501,17 @@ class Session:
         if self.args.max_r15 is not None and not math.isnan(i.r15) and i.r15 > self.args.max_r15:
             self.rejections["ran15mTooFast(exp)"] += 1
             return
+        if self.args.max_climax_atr is not None and s.climax_atr > self.args.max_climax_atr:
+            self.rejections["climaxBar(exp)"] += 1
+            return
+        if self.args.market_gate:
+            idx = self.inst.get(INDEX)
+            if idx is not None and idx.bars:
+                from_open = (idx.last / idx.bars[0].open - 1) * 100.0 if idx.bars[0].open > 0 else math.nan
+                r60 = return_pct(idx.bars, 60)
+                if (not math.isnan(from_open) and from_open < -0.3) or (not math.isnan(r60) and r60 < -0.2):
+                    self.rejections["marketWeak(exp)"] += 1
+                    return
         entry = price
         stop = s.structure_low
         if not math.isnan(i.atr) and i.atr > 0:
@@ -722,6 +738,10 @@ def main():
                     help="experimental: refuse a trigger more than this %% above session VWAP")
     ap.add_argument("--max-r15", type=float, default=None,
                     help="experimental: refuse a trigger whose 15-minute return exceeds this %%")
+    ap.add_argument("--max-climax-atr", type=float, default=None,
+                    help="experimental: refuse a setup whose run-up had a bar taller than this many ATRs")
+    ap.add_argument("--market-gate", action="store_true",
+                    help="experimental: refuse when NIFTY is below -0.3%% from its open or fell >0.2%% over the last hour")
     ap.add_argument("--no-captured", dest="use_captured", action="store_false",
                     help="ignore the day context columns in the tape even when present")
     args = ap.parse_args()
