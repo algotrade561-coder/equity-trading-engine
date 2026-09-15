@@ -91,7 +91,8 @@ class DecisionJournalTest {
         assertThat(row.path("entryAbovePauseLowR").asDouble())
                 .as("(46.37 - 46.08) / (46.37 - 46.10): the entry sat about one R above the pause low")
                 .isCloseTo(1.074, org.assertj.core.data.Offset.offset(0.001));
-        // the shadow gates, each a verdict — this trade fails the climax and market gates
+        // the shadow gates, each a verdict — this trade fails the climax and market gates (the
+        // index is down 1.02% from the open and 0.6% over the last hour)
         JsonNode gates = row.path("shadowGates");
         assertThat(gates.path("climaxLe3Atr").asBoolean()).isFalse();
         assertThat(gates.path("ret15Le1_5").asBoolean()).isTrue();

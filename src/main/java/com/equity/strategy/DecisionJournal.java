@@ -97,8 +97,13 @@ public class DecisionJournal {
     static final double SHADOW_MAX_CLIMAX_ATR = 3.0;     // run-up made of one bar taller than 3 ATR
     static final double SHADOW_MAX_RET15M_PCT = 1.5;     // fifteen-minute return at the trigger
     static final double SHADOW_MAX_VWAP_EXT_PCT = 1.6;   // distance above session VWAP at the trigger
+    // The market gate is about direction, not level. 11 September (7 of 13 won) never had more than
+    // a third of the universe green, but the index rose from the open all day; 15 September (0 of 3)
+    // had better breadth at the open and the index fell one per cent in a straight line. So the
+    // gate reads the index's path — not down from the open, not falling over the last hour — and
+    // breadth is recorded beside it rather than tested.
     static final double SHADOW_MIN_NIFTY_FROM_OPEN = -0.3;   // the index not already down on the day
-    static final double SHADOW_MIN_BREADTH_PCT = 40.0;       // at least this share of the universe green
+    static final double SHADOW_MIN_NIFTY_RET60M = -0.2;      // and not sliding over the last hour
 
     private static String shadowGates(SharedInstrumentState s, SetupState setup,
                                       com.equity.market.state.MarketContext.Snapshot m) {
@@ -107,7 +112,7 @@ public class DecisionJournal {
         boolean vwapOk = !(s.distanceFromVwapPercent() > SHADOW_MAX_VWAP_EXT_PCT);
         boolean marketOk = m != null
                 && !(m.indexChangeFromOpenPct() < SHADOW_MIN_NIFTY_FROM_OPEN)
-                && !(m.pctUpOnDay() < SHADOW_MIN_BREADTH_PCT);
+                && !(m.indexReturn60mPct() < SHADOW_MIN_NIFTY_RET60M);
         return "\"shadowGates\":{\"climaxLe3Atr\":" + climaxOk
                 + ",\"ret15Le1_5\":" + ret15Ok
                 + ",\"vwapExtLe1_6\":" + vwapOk
