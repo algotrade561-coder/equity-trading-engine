@@ -92,6 +92,7 @@ class SessionReconciliationScheduleTest {
                 mock(com.equity.market.universe.IndexConstituentSource.class),
                 mock(com.equity.market.InstrumentFreshness.class),
                 mock(com.equity.strategy.MomentumStrategy.class),
+                mock(com.equity.strategy.ShadowTrader.class),
                 mock(com.equity.strategy.RejectionLog.class),
                 mock(com.equity.strategy.DecisionJournal.class),
                 mock(com.equity.risk.RiskEngine.class),

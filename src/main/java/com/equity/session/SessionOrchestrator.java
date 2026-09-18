@@ -85,6 +85,7 @@ public class SessionOrchestrator {
     private final IndexConstituentSource constituents;
     private final InstrumentFreshness freshness;
     private final MomentumStrategy strategy;
+    private final com.equity.strategy.ShadowTrader shadows;
     private final RejectionLog rejections;
     private final DecisionJournal journal;
     private final RiskEngine risk;
@@ -109,6 +110,7 @@ public class SessionOrchestrator {
                                UniverseProperties universeProperties,
                                IndexConstituentSource constituents,
                                InstrumentFreshness freshness, MomentumStrategy strategy,
+                               com.equity.strategy.ShadowTrader shadows,
                                RejectionLog rejections, DecisionJournal journal,
                                RiskEngine risk, AccountLedger ledger,
                                MarginCache margins, MarginRequirements requirements,
@@ -126,6 +128,7 @@ public class SessionOrchestrator {
         this.constituents = constituents;
         this.freshness = freshness;
         this.strategy = strategy;
+        this.shadows = shadows;
         this.rejections = rejections;
         this.journal = journal;
         this.risk = risk;
@@ -181,6 +184,7 @@ public class SessionOrchestrator {
         lifecycle.setAtrSource(symbol -> structure.state(symbol)
                 .map(SharedInstrumentState::atr).orElse(Double.NaN));
         lifecycle.onOutcome(journal::tradeOutcome);
+        shadows.onOutcome(journal::shadowOutcome);
         lifecycle.setExitPolicySource(userId -> users.find(userId)
                 .map(UserAccount::exitPolicy).orElseGet(com.equity.strategy.ExitPolicy::fixed));
 
@@ -198,6 +202,7 @@ public class SessionOrchestrator {
      * needed attention.</p>
      */
     private void onTick(Tick tick) {
+        shadows.onTick(tick);
         lifecycle.onTick(tick);
 
         if (!universe.isCandidate(tick.symbol())) return;
@@ -218,6 +223,15 @@ public class SessionOrchestrator {
                     strategy.setupFor(account.userId(), tick.symbol()),
                     signal.intent().referencePrice(), signal.intent().stopPrice(),
                     signal.intent().targetPrice(), account.mayOpen(), tick.book());
+            // Every intent is also followed on paper, so the entry can be scored whether or not an
+            // order went out. Failures here must never touch the real path.
+            try {
+                shadows.open(signal.intent(), String.valueOf(signal.intent().pattern()), account.mayOpen(),
+                        account.limits(), account.thresholds().timeStopMinutes(),
+                        account.thresholds().squareOffTime());
+            } catch (RuntimeException e) {
+                log.warn("shadow open failed for {}: {}", tick.symbol(), e.toString());
+            }
 
             if (account.mayOpen()) {
                 attemptEntry(account, signal, state.get(), tick);
@@ -413,6 +427,14 @@ public class SessionOrchestrator {
     @Scheduled(fixedDelay = 10_000)
     public void sessionGuards() {
         LocalTime now = clock.timeOfDay();
+        try {
+            shadows.checkClocks(symbol -> {
+                Tick last = router.lastTick(symbol);
+                return last == null ? 0 : last.lastPrice();
+            });
+        } catch (RuntimeException e) {
+            log.warn("shadow clock check failed: {}", e.toString());
+        }
         for (UserAccount account : users.all()) {
             lifecycle.checkTimeStops(account.userId(), account.thresholds().timeStopMinutes());
 

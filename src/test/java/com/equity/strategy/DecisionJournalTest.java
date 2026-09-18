@@ -98,7 +98,36 @@ class DecisionJournalTest {
         assertThat(gates.path("ret15Le1_5").asBoolean()).isTrue();
         assertThat(gates.path("vwapExtLe1_6").asBoolean()).isTrue();
         assertThat(gates.path("marketOk").asBoolean()).isFalse();
+        // the freshness gates added on 18 September: impulse 5 minutes ago, rank 7, 5m return 0.45
+        assertThat(gates.path("freshImpulseLe6m").asBoolean()).isTrue();
+        assertThat(gates.path("rankLe15").asBoolean()).isTrue();
+        assertThat(gates.path("ret5Ge0_5").asBoolean()).isFalse();
         assertThat(gates.path("all").asBoolean()).isFalse();
+    }
+
+    @Test
+    void aPaperOutcomeIsWrittenWithTheSameFieldsAsARealOne() throws IOException {
+        DecisionJournal journal = new DecisionJournal(new FixedTradingClock(NOW), true, dir.toString(),
+                new MarketContext(null, null, null) {
+                    @Override public Snapshot snapshot() { return downDay(); }
+                });
+        ShadowTrader shadows = new ShadowTrader(new FixedTradingClock(NOW));
+        shadows.onOutcome(journal::shadowOutcome);
+        shadows.open(new com.equity.domain.order.TradeIntent(UserId.random(), "SAGILITY", com.equity.domain.Direction.LONG,
+                        com.equity.domain.momentum.EntryPattern.CONSOLIDATION_BREAKOUT, 46.37, 46.10, 46.73, NOW, "t"),
+                "CONSOLIDATION_BREAKOUT", false, com.equity.domain.risk.RiskLimits.house(), 90, java.time.LocalTime.of(15, 10));
+        shadows.onTick(com.equity.domain.market.Tick.ltp("SAGILITY", 46.05, 0, NOW.plusSeconds(300)));
+
+        JsonNode row = rowsOf(journal).get(0);
+        assertThat(row.path("kind").asText()).isEqualTo("shadowOutcome");
+        assertThat(row.path("userArmed").asBoolean()).isFalse();
+        assertThat(row.path("exitReason").asText()).isEqualTo("HARD_STOP");
+        assertThat(row.path("intentTs").asText()).isEqualTo(NOW.toString());
+        for (String field : List.of("entry", "exit", "stop", "target", "qty", "pnl", "netPnl", "charges", "mfeR", "maeR",
+                "openedAt", "closedAt", "niftyFromOpenPct")) {
+            assertThat(row.has(field)).as(field).isTrue();
+        }
+        assertThat(row.path("netPnl").asDouble()).isLessThan(0);
     }
 
     @Test

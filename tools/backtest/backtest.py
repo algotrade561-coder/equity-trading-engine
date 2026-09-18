@@ -245,6 +245,7 @@ class Setup:
     mandatory_ok: bool = True
     mandatory_failure: str = ""
     climax_atr: float = 0.0
+    impulse_at: Optional[datetime] = None
 
     def move_to(self, s):
         if self.state != s:
@@ -255,6 +256,7 @@ class Setup:
     def invalidate(self, now: datetime, cooldown: timedelta):
         self.impulse_high = self.structure_low = self.trigger = 0.0
         self.climax_atr = 0.0
+        self.impulse_at = None
         self.bars_in_pause = self.bars_since_armed = 0
         self.pattern = None
         self.cooldown_until = now + cooldown
@@ -425,6 +427,8 @@ class Session:
             raise Rejection("IMPULSE", "noVolumeBehindThrust")
         s.impulse_high, s.bars_in_pause = high_of_last(i.bars, 5), 0
         s.climax_atr = (max(b.high - b.low for b in i.bars[-5:]) / i.atr) if i.atr and i.atr > 0 else 0.0
+        if s.state != "IMPULSE":
+            s.impulse_at = self.now
         s.move_to("IMPULSE")
 
     def try_pause(self, i: Inst, s: Setup):
@@ -500,6 +504,12 @@ class Session:
             return
         if self.args.max_r15 is not None and not math.isnan(i.r15) and i.r15 > self.args.max_r15:
             self.rejections["ran15mTooFast(exp)"] += 1
+            return
+        if self.args.max_minutes_since_impulse is not None and s.impulse_at is not None                 and (self.now - s.impulse_at) > timedelta(minutes=self.args.max_minutes_since_impulse):
+            self.rejections["staleImpulse(exp)"] += 1
+            return
+        if self.args.max_rank is not None and i.rank > self.args.max_rank:
+            self.rejections["rankTooLow(exp)"] += 1
             return
         if self.args.max_climax_atr is not None and s.climax_atr > self.args.max_climax_atr:
             self.rejections["climaxBar(exp)"] += 1
@@ -738,6 +748,10 @@ def main():
                     help="experimental: refuse a trigger more than this %% above session VWAP")
     ap.add_argument("--max-r15", type=float, default=None,
                     help="experimental: refuse a trigger whose 15-minute return exceeds this %%")
+    ap.add_argument("--window-start", default=None, help="experimental: entry window start HH:MM (default 09:30)")
+    ap.add_argument("--max-minutes-since-impulse", type=int, default=None,
+                    help="experimental: refuse a trigger more than this many minutes after the impulse began")
+    ap.add_argument("--max-rank", type=int, default=None, help="experimental: refuse a trigger on a stock ranked worse than this")
     ap.add_argument("--max-climax-atr", type=float, default=None,
                     help="experimental: refuse a setup whose run-up had a bar taller than this many ATRs")
     ap.add_argument("--market-gate", action="store_true",
@@ -745,6 +759,9 @@ def main():
     ap.add_argument("--no-captured", dest="use_captured", action="store_false",
                     help="ignore the day context columns in the tape even when present")
     args = ap.parse_args()
+    if args.window_start:
+        hh, mm = map(int, args.window_start.split(":"))
+        T["window_start"] = time(hh, mm)
 
     os.makedirs(args.out, exist_ok=True)
     lines: List[str] = []

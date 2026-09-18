@@ -104,9 +104,20 @@ public class DecisionJournal {
     // breadth is recorded beside it rather than tested.
     static final double SHADOW_MIN_NIFTY_FROM_OPEN = -0.3;   // the index not already down on the day
     static final double SHADOW_MIN_NIFTY_RET60M = -0.2;      // and not sliding over the last hour
+    // Added 18 September after the first three gates inverted on the week's real fills: the trades
+    // that failed them were the winners. What did separate winners was freshness of the move and
+    // where the stock sat on the board.
+    static final long SHADOW_MAX_MINUTES_SINCE_IMPULSE = 6;  // the impulse began within this many minutes
+    static final int SHADOW_MAX_RANK = 15;                   // top of the gainers board at the trigger
+    static final double SHADOW_MIN_RET5M_PCT = 0.5;          // still accelerating into the trigger
 
-    private static String shadowGates(SharedInstrumentState s, SetupState setup,
-                                      com.equity.market.state.MarketContext.Snapshot m) {
+    private String shadowGates(SharedInstrumentState s, SetupState setup,
+                               com.equity.market.state.MarketContext.Snapshot m) {
+        long sinceImpulse = setup.impulseStartedAt() == null ? Long.MAX_VALUE
+                : java.time.Duration.between(setup.impulseStartedAt(), clock.now()).toMinutes();
+        boolean freshOk = sinceImpulse <= SHADOW_MAX_MINUTES_SINCE_IMPULSE;
+        boolean rankOk = s.currentGainerRank() > 0 && s.currentGainerRank() <= SHADOW_MAX_RANK;
+        boolean ret5Ok = s.return5m() >= SHADOW_MIN_RET5M_PCT;
         boolean climaxOk = !(setup.climaxBarAtr() > SHADOW_MAX_CLIMAX_ATR);
         boolean ret15Ok = !(s.return15m() > SHADOW_MAX_RET15M_PCT);
         boolean vwapOk = !(s.distanceFromVwapPercent() > SHADOW_MAX_VWAP_EXT_PCT);
@@ -117,6 +128,9 @@ public class DecisionJournal {
                 + ",\"ret15Le1_5\":" + ret15Ok
                 + ",\"vwapExtLe1_6\":" + vwapOk
                 + ",\"marketOk\":" + marketOk
+                + ",\"freshImpulseLe6m\":" + freshOk
+                + ",\"rankLe15\":" + rankOk
+                + ",\"ret5Ge0_5\":" + ret5Ok
                 + ",\"all\":" + (climaxOk && ret15Ok && vwapOk && marketOk) + "}";
     }
 
@@ -264,6 +278,40 @@ public class DecisionJournal {
      * fields are fixed and few, and a reflective serialiser on the tick path is cost paid on every
      * decision for flexibility nothing here needs.</p>
      */
+    /**
+     * A paper position closed. The same fields as a real outcome so the two are read by the same
+     * code, plus whether the user was armed — when they were, a real outcome exists for the same
+     * intent and the difference between the two is the cost of execution.
+     */
+    public void shadowOutcome(ShadowTrader.Outcome o) {
+        if (!enabled || o == null) return;
+        ShadowTrader.Paper p = o.paper();
+        offer("{\"ts\":\"" + clock.now() + "\""
+                + ",\"kind\":\"shadowOutcome\""
+                + ",\"user\":\"" + p.userId + "\""
+                + ",\"symbol\":" + quote(p.symbol)
+                + ",\"pattern\":" + quote(p.pattern)
+                + ",\"userArmed\":" + p.userWasArmed
+                + ",\"intentTs\":\"" + p.intentAt + "\""
+                + ",\"openedAt\":\"" + p.openedAt + "\""
+                + ",\"closedAt\":\"" + o.closedAt() + "\""
+                + ",\"qty\":" + p.quantity
+                + ",\"intendedEntry\":" + num(p.intended)
+                + ",\"entry\":" + num(p.entry)
+                + ",\"exit\":" + num(o.exit())
+                + ",\"stop\":" + num(p.stop)
+                + ",\"target\":" + num(p.target)
+                + ",\"riskPerShare\":" + num(p.riskPerShare())
+                + ",\"exitReason\":\"" + o.reason() + "\""
+                + ",\"pnl\":" + num(o.grossPnl())
+                + ",\"charges\":" + num(o.charges())
+                + ",\"netPnl\":" + num(o.netPnl())
+                + ",\"mfeR\":" + num(p.favourableExcursionR())
+                + ",\"maeR\":" + num(p.adverseExcursionR())
+                + marketFields()
+                + "}");
+    }
+
     private String row(String kind, UserId userId, SharedInstrumentState s, SetupState setup) {
         return "{\"ts\":\"" + clock.now() + "\""
                 + ",\"kind\":\"" + kind + "\""
